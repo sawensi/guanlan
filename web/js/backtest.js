@@ -171,6 +171,15 @@ function showBtError(msg) {
 
 // ── 渲染结果 ─────────────────────────────────────────
 
+// 数据来源提示条（回测数字诚实化：价格指数/QDII 代理等已知偏差明示给用户）
+function renderDataNote(note) {
+  if (!note) return '';
+  return '<div class="data-quality-banner banner-warning">' +
+    '<span class="banner-icon">⚠️</span>' +
+    '<span class="banner-text">' + escHtml(note) + '</span>' +
+    '</div>';
+}
+
 function renderBacktestResults(data) {
   if (!data || !data.metrics) {
     showBtError('回测返回数据异常');
@@ -217,7 +226,7 @@ function renderBacktestResults(data) {
   // 4. 交易明细
   var tradeHtml = renderTradeTable(data.trade_log || []);
 
-  $('btResults').innerHTML = summaryHtml + cardsHtml + chartHtml + tradeHtml;
+  $('btResults').innerHTML = summaryHtml + renderDataNote(data.data_note) + cardsHtml + chartHtml + tradeHtml;
 
   // 延迟渲染图表（等 DOM 就绪）
   setTimeout(function() {
@@ -438,7 +447,7 @@ function renderCompareExits(data) {
       '</details>';
   }
 
-  $('btResults').innerHTML = summaryHtml + chartHtml + tableHtml +
+  $('btResults').innerHTML = summaryHtml + renderDataNote(data.data_note) + chartHtml + tableHtml +
     '<div class="bt-trade-section"><div class="card-label">📋 各策略交易明细</div>' + detailsHtml + '</div>';
 
   // 延迟渲染图表（等 DOM 就绪）

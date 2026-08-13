@@ -904,5 +904,6 @@ def run_backtest_multi_exit(
         "min_holding_days": min_holding_days,
         "benchmark_curve": benchmark_curve,
         "exit_results": exit_results,
+        "data_note": first_run.get("data_note"),
         "generated_at": datetime.now().isoformat(),
     }

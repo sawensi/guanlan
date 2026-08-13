@@ -16,7 +16,7 @@ async function loadDash() {
   renderCycle(data);
   renderDataQualityBanner(data);
   renderIndicators(data.indicators);
-  renderAlloc(data.allocation);
+  renderAlloc(data.allocation, data.allocation_note);
   // 图表延迟渲染，确保 DOM 可见
   setTimeout(() => {
     renderRose(data);
@@ -194,11 +194,14 @@ function renderIndicators(list) {
 
 // ── Allocation list ─────────────────────────────
 
-function renderAlloc(items) {
+function renderAlloc(items, note) {
   if (!items?.length) return;
   const sorted = [...items].sort((a,b) => b.ratio - a.ratio);
   const rk = ['r1','r2','r3'];
-  $('allocList').innerHTML = sorted.map((x,i) => {
+  const noteHtml = note
+    ? '<div style="background:#fdf6ed;border:1px solid #e8b86d;border-radius:8px;padding:8px 12px;font-size:.78rem;color:#8b6914;margin-bottom:10px;">⚖️ ' + note + '</div>'
+    : '';
+  $('allocList').innerHTML = noteHtml + sorted.map((x,i) => {
     const pct = Math.round(x.ratio*100);
     return `<div class="alloc-row">
       <div class="alloc-rank ${rk[i]||''}">${i+1}</div>
@@ -605,7 +608,8 @@ function renderValuation(data) {
     '<div style="background:' + sigBg + ';border-radius:8px;padding:10px 14px;display:flex;align-items:center;gap:10px;">' +
       '<span style="font-size:1.2rem;">' + sigIcon + '</span>' +
       '<div>' +
-        '<span style="font-weight:700;color:' + sigColor + ';">建议' + v.signal + '股票</span>' +
+        '<span style="font-weight:700;color:' + sigColor + ';">建议' + v.signal + '股票' +
+          (v.equity_weight > 0 ? ' · 仓位 ' + Math.round(v.equity_weight) + '%' : '') + '</span>' +
         '<span style="font-size:.7rem;color:#666;margin-left:6px;">' + erpNote + '</span>' +
       '</div>' +
     '</div>';

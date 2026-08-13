@@ -30,6 +30,7 @@ from allocator import (
     get_allocation_chart_data,
     get_quadrant_chart_data,
     get_etf_recommendations,
+    adjust_allocation_by_valuation,
 )
 
 # ── 路径配置 ───────────────────────────────────────────
@@ -464,6 +465,53 @@ async def get_strategies():
     }
 
 
+@app.get("/guanlan/api/decision-overview")
+async def get_decision_overview(
+    fund_code: str = Query(default=None, description="可选基金代码，传入则附离场共识"),
+):
+    """信号一致性面板：入场共识 + 周期阶段 + 估值信号 + 建议仓位（可选离场共识）"""
+    from quant_strategies import get_all_strategies, synthesize_entry_decision
+    from strategy_engine import compute_all_signals
+
+    cycle_str = _latest_dashboard.get("cycle", "复苏期") if _latest_dashboard else "复苏期"
+    cycle_conf = _latest_dashboard.get("cycle_confidence", 0) if _latest_dashboard else 0
+    valuation = (_latest_dashboard or {}).get("valuation") or None
+
+    # 1. 入场共识（7 个入场策略统合）
+    signals = compute_all_signals()
+    strategies = get_all_strategies(cycle_str, signals)
+    entry_consensus = synthesize_entry_decision(strategies)
+
+    # 2. 可选离场共识（需拉取基金数据）
+    exit_consensus = None
+    if fund_code:
+        try:
+            from exit_strategies import get_all_exit_strategies, synthesize_exit_decision
+            from fund_data import fetch_fund_history
+            fund_data = fetch_fund_history(fund_code)
+            if fund_data is not None:
+                xuxiaoming_stance = None
+                if _latest_insights and _latest_insights.xu_xiaoming_stance:
+                    xuxiaoming_stance = _latest_insights.xu_xiaoming_stance.model_dump()
+                exit_strats = get_all_exit_strategies(
+                    fund_data, None, None, cycle_str, None,
+                    xuxiaoming_stance=xuxiaoming_stance,
+                )
+                exit_consensus = synthesize_exit_decision(exit_strats, fund_data)
+        except Exception as e:
+            print(f"[观澜] decision-overview exit consensus failed (non-fatal): {e}")
+
+    return {
+        "cycle": cycle_str,
+        "cycle_confidence": cycle_conf,
+        "valuation": valuation,
+        "entry_consensus": entry_consensus,
+        "exit_consensus": exit_consensus,
+        "fund_code": fund_code,
+        "generated_at": datetime.now().isoformat(),
+    }
+
+
 @app.get("/guanlan/api/strategies/{strategy_id}")
 async def get_strategy_detail(strategy_id: str):
     """获取特定策略详情（含真实市场信号）"""
@@ -869,6 +917,14 @@ async def refresh_macro_data():
         print(f"[观澜] Valuation fetch failed (non-fatal): {e}")
         valuation = None
 
+    # 4.7 估值温度计 → 调整股票类占比（B1）
+    allocation_note = ""
+    if valuation is not None and valuation.equity_weight > 0:
+        allocation, allocation_note = adjust_allocation_by_valuation(
+            allocation, valuation.equity_weight
+        )
+        chart_raw = get_allocation_chart_data(allocation)
+
     charts = ChartData(
         rose_data=chart_raw["rose_data"],
         pie_data=chart_raw["pie_data"],
@@ -890,6 +946,7 @@ async def refresh_macro_data():
         data_quality_warning=data_quality_warning,
         quality_warnings=quality_warnings,
         valuation=valuation,
+        allocation_note=allocation_note,
     )
 
     _latest_dashboard = dashboard.model_dump()
@@ -1031,6 +1088,20 @@ async def refresh_rankings():
 
 # ── 策略回测 API ─────────────────────────────────────
 
+def _default_position_size_from_valuation() -> float:
+    """position_size 未显式传入时，回退到估值温度计建议股票仓位（0~1）。"""
+    global _latest_dashboard
+    try:
+        val = (_latest_dashboard or {}).get("valuation") or {}
+        w = val.get("equity_weight")
+        if w and w > 0:
+            return max(0.1, min(1.0, round(w / 100.0, 2)))
+    except Exception:
+        pass
+    return 1.0
+
+
+
 @app.get("/guanlan/api/backtest")
 async def run_backtest_endpoint(
     fund_code: str = Query(default="510300", description="ETF代码，如 510300"),
@@ -1039,11 +1110,14 @@ async def run_backtest_endpoint(
     start_date: str = Query(default="2021-01-01", description="回测起始日期"),
     end_date: str = Query(default="2025-12-31", description="回测结束日期"),
     initial_capital: float = Query(default=100000, ge=1000, description="初始资金"),
-    position_size: float = Query(default=1.0, ge=0.1, le=1.0, description="仓位比例"),
+    position_size: float = Query(default=None, ge=0.1, le=1.0, description="仓位比例（缺省按估值建议仓位）"),
     cycle_assumption: str = Query(default="复苏期", description="宏观周期假设"),
 ):
     """运行策略回测：在历史数据上模拟入场+离场策略组合"""
     from backtest_engine import run_backtest as _run_backtest
+
+    if position_size is None:
+        position_size = _default_position_size_from_valuation()
 
     # 验证入场策略
     from quant_strategies import STRATEGY_DEFS
@@ -1095,11 +1169,14 @@ async def run_backtest_compare_endpoint(
     start_date: str = Query(default="2021-01-01", description="回测起始日期"),
     end_date: str = Query(default="2025-12-31", description="回测结束日期"),
     initial_capital: float = Query(default=100000, ge=1000, description="初始资金"),
-    position_size: float = Query(default=1.0, ge=0.1, le=1.0, description="仓位比例"),
+    position_size: float = Query(default=None, ge=0.1, le=1.0, description="仓位比例（缺省按估值建议仓位）"),
     cycle_assumption: str = Query(default="复苏期", description="宏观周期假设"),
 ):
     """单入场 + 多离场策略对比回测：一次拉取行情，多个离场策略独立模拟，返回对比数据包。"""
     from backtest_engine import run_backtest_multi_exit as _run_multi
+
+    if position_size is None:
+        position_size = _default_position_size_from_valuation()
 
     # 验证入场策略
     from quant_strategies import STRATEGY_DEFS

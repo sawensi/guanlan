@@ -431,3 +431,85 @@ def get_strategy_by_id(sid: str, current_cycle: str, signals: dict = None) -> Qu
                 etf_picks=ETF_PICKS.get(s.get("etf_category", ""), []),
             )
     return None
+
+
+# ── 入场信号综合决策（跨 7 个入场策略统合） ──────────────────
+
+# 入场信号方向权重（买入 +1 / 卖出 -1 / 持有 +0.35 / 观望 0）
+ENTRY_SIGNAL_SCORES = {"买入": 1.0, "持有": 0.35, "观望": 0.0, "卖出": -1.0}
+
+
+def synthesize_entry_decision(strategies: list[QuantStrategy]) -> dict:
+    """
+    综合所有入场策略，输出偏多/分歧/偏空共识 + 加权得分 + 各策略投票。
+
+    score: 0-100，50 为中性（买入/卖出对称加权）。
+    consensus: 偏多共识 | 信号分歧 | 偏空共识。
+    """
+    if not strategies:
+        return {
+            "recommendation": "数据不足",
+            "consensus": "无法判断",
+            "score": 50.0,
+            "breakdown": {},
+            "key_reasons": [],
+            "votes": [],
+        }
+
+    breakdown = {"买入": 0, "持有": 0, "观望": 0, "卖出": 0}
+    total_score = 0.0
+    votes = []
+
+    for s in strategies:
+        sig = s.current_signal
+        if sig is None:
+            breakdown["观望"] = breakdown.get("观望", 0) + 1
+            votes.append({"strategy_id": s.id, "strategy_name": s.name,
+                          "signal": "观望", "confidence": 0.5, "reasoning": ""})
+            continue
+
+        signal = sig.signal or "观望"
+        conf = sig.confidence or 0.5
+        breakdown[signal] = breakdown.get(signal, 0) + 1
+        total_score += ENTRY_SIGNAL_SCORES.get(signal, 0) * conf
+        votes.append({
+            "strategy_id": s.id,
+            "strategy_name": s.name,
+            "signal": signal,
+            "confidence": round(conf, 2),
+            "reasoning": (sig.reasoning or "").split("|")[0].strip(),
+        })
+
+    n = len(strategies)
+    # 归一化到 0-100：total_score ∈ [-n, n] → score ∈ [0, 100]，50 为中性
+    score = round((total_score / n + 1.0) / 2.0 * 100.0, 1)
+    score = max(0.0, min(100.0, score))
+
+    if score >= 60:
+        consensus = "偏多共识"
+        recommendation = "多数策略看多，可分批布局"
+    elif score <= 40:
+        consensus = "偏空共识"
+        recommendation = "多数策略看空，宜观望或减仓"
+    else:
+        consensus = "信号分歧"
+        recommendation = "多空信号打架，等待方向明朗"
+
+    # 关键理由：|加权分| 最高的 3 个策略
+    ranked = sorted(votes, key=lambda v: abs(ENTRY_SIGNAL_SCORES.get(v["signal"], 0) * v["confidence"]),
+                    reverse=True)
+    key_reasons = []
+    for v in ranked[:3]:
+        r = v["reasoning"]
+        if len(r) > 60:
+            r = r[:60] + "…"
+        key_reasons.append(f"【{v['strategy_name']}】{v['signal']} — {r}")
+
+    return {
+        "recommendation": recommendation,
+        "consensus": consensus,
+        "score": score,
+        "breakdown": breakdown,
+        "key_reasons": key_reasons,
+        "votes": votes,
+    }

@@ -72,6 +72,9 @@ class ValuationData(BaseModel):
     bond_10y: float = 0            # 10年期国债收益率
     signal: str = "正常"           # 超配 | 正常 | 低配
     data_date: str = ""            # 数据日期
+    equity_weight: float = 0       # 建议股票仓位% (0~100, 由ERP+PE分位映射)
+    equity_band: str = ""          # 建议仓位区间描述
+    dividend_yield: Optional[float] = None  # 沪深300股息率% (暂无稳定数据源, 置空)
 
 
 class DashboardResponse(BaseModel):
@@ -88,6 +91,7 @@ class DashboardResponse(BaseModel):
     data_quality_warning: bool = False    # 数据质量警告
     quality_warnings: list[str] = []      # 人类可读的警告信息
     valuation: Optional[ValuationData] = None  # 估值温度计
+    allocation_note: str = ""             # 估值温度计调整资产配置的说明
 
 
 class ArticleItem(BaseModel):

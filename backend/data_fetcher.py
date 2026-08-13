@@ -559,6 +559,49 @@ def _save_valuation_cache(data: dict) -> None:
         json.dump(cache, f, ensure_ascii=False, indent=2)
 
 
+def _compute_equity_weight(erp: float, pe_percentile: float) -> tuple[float, str]:
+    """
+    ERP(股债性价比) + PE 分位 → 建议股票仓位%。
+
+    锚点（分段线性插值）:
+        ERP >= 5.5% → 80%（股市极便宜 → 重仓）
+        ERP =  3.5% → 60%（合理偏低）
+        ERP <= 2.5% → 35%（昂贵 → 轻仓）
+    PE 分位作辅助（分位越高越贵 → 仓位越低，幅度 ±10%）。
+    返回 (weight_pct, band)。
+    """
+    if erp <= 0:
+        return 0.0, "估值数据不足，暂不调整"
+
+    if erp >= 5.5:
+        base = 80.0
+    elif erp >= 3.5:
+        base = 60.0 + (erp - 3.5) / 2.0 * 20.0   # 60% → 80%
+    elif erp >= 2.5:
+        base = 35.0 + (erp - 2.5) * 25.0           # 35% → 60%
+    else:
+        base = 35.0
+
+    # PE 分位辅助调整: 分位 = 0.5 时无调整，0 → +10%，1 → -10%
+    base += (0.5 - pe_percentile) * 20.0
+
+    weight = max(20.0, min(90.0, base))
+    lo = max(0, int(round(weight)) - 10)
+    hi = min(100, int(round(weight)) + 10)
+    return round(weight, 1), f"{lo}%~{hi}%"
+
+
+def _ensure_equity_weight(data: dict) -> dict:
+    """兼容旧估值缓存：补齐 equity_weight / equity_band / dividend_yield 字段。"""
+    if not data.get("equity_weight"):
+        w, band = _compute_equity_weight(data.get("erp", 0), data.get("pe_percentile", 0))
+        data["equity_weight"] = w
+        data["equity_band"] = band
+    data.setdefault("equity_band", "")
+    data.setdefault("dividend_yield", None)
+    return data
+
+
 async def fetch_csi300_valuation(force: bool = False) -> dict | None:
     """
     获取沪深300估值温度计数据: PE/PB分位 + ERP(股债性价比)
@@ -569,7 +612,7 @@ async def fetch_csi300_valuation(force: bool = False) -> dict | None:
     if not force:
         cached = _load_valuation_cache()
         if cached is not None:
-            return cached
+            return _ensure_equity_weight(cached)
 
     try:
         import akshare as ak
@@ -587,6 +630,14 @@ async def fetch_csi300_valuation(force: bool = False) -> dict | None:
         # ── PE 分位 ──
         pe = 0.0
         pe_pct = 0.0
+        if isinstance(pe_df, Exception) or pe_df is None or len(pe_df) == 0:
+            # 重试一次（并发时偶发失败，同 PB 的处理）
+            print(f"[data_fetcher] PE fetch retrying...")
+            await asyncio.sleep(3)
+            try:
+                pe_df = await asyncio.to_thread(ak.stock_index_pe_lg, symbol="沪深300")
+            except Exception:
+                pe_df = None
         if not isinstance(pe_df, Exception) and pe_df is not None and len(pe_df) > 0:
             pe_df["日期"] = pd.to_datetime(pe_df["日期"])
             pe_df = pe_df.set_index("日期").sort_index()
@@ -639,17 +690,26 @@ async def fetch_csi300_valuation(force: bool = False) -> dict | None:
         else:
             signal = "正常"
 
+        # ── 建议股票仓位（估值温度计 → 具体力度）──
+        equity_weight, equity_band = _compute_equity_weight(erp, pe_pct)
+
         data_date = datetime.now().strftime("%Y-%m-%d")
         result = {
             "pe": pe, "pe_percentile": pe_pct,
             "pb": pb, "pb_percentile": pb_pct,
             "erp": erp, "bond_10y": bond_10y,
             "signal": signal, "data_date": data_date,
+            "equity_weight": equity_weight,
+            "equity_band": equity_band,
+            # 沪深300股息率：akshare 无稳定指数级股息率接口（stock_index_dividend 不存在），
+            # 暂置空，留待 A5「真实基金净值数据源」后续项补全。
+            "dividend_yield": None,
         }
 
         _save_valuation_cache(result)
         print(f"[data_fetcher] CSI300 Valuation: PE={pe}(Pct={pe_pct*100:.0f}%) "
-              f"PB={pb}(Pct={pb_pct*100:.0f}%) ERP={erp}% → {signal}")
+              f"PB={pb}(Pct={pb_pct*100:.0f}%) ERP={erp}% → {signal}, "
+              f"建议股票仓位 {equity_weight}%")
         return result
 
     except Exception as e:

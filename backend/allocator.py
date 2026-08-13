@@ -58,6 +58,47 @@ def get_allocation(cycle: CycleStage) -> list[AllocationItem]:
     ]
 
 
+# 股票类资产关键词（估值调整时识别股权风险敞口）
+EQUITY_ASSET_KEYWORDS = ("股票", "REITs")
+
+
+def _is_equity_asset(asset: str) -> bool:
+    return any(kw in asset for kw in EQUITY_ASSET_KEYWORDS)
+
+
+def adjust_allocation_by_valuation(allocation: list[AllocationItem],
+                                   equity_weight_pct: float) -> tuple[list[AllocationItem], str]:
+    """
+    把美林时钟配置里的股票类占比向估值温度计建议仓位靠拢。
+
+    equity_weight_pct: 0~100 的建议股票仓位%（来自 fetch_csi300_valuation）。
+    股票类资产等比例缩放到 target，非股票类缩放占剩余 1-target，总和保持 100%。
+    返回 (调整后配置, 说明文字)；无需调整时说明为空字符串。
+    """
+    target = max(0.0, min(1.0, (equity_weight_pct or 0) / 100.0))
+    current_equity = sum(it.ratio for it in allocation if _is_equity_asset(it.asset))
+
+    # 无股票类资产 / 目标无效 / 差异过小 → 不调整，避免噪声
+    if current_equity <= 0 or target <= 0 or abs(current_equity - target) < 0.02:
+        return allocation, ""
+
+    scale_equity = target / current_equity
+    scale_non = (1.0 - target) / (1.0 - current_equity) if current_equity < 1.0 else 0.0
+
+    adjusted = [
+        AllocationItem(
+            asset=it.asset,
+            ratio=round(it.ratio * (scale_equity if _is_equity_asset(it.asset) else scale_non), 4),
+            reason=it.reason,
+        )
+        for it in allocation
+    ]
+
+    note = (f"估值温度计建议股票仓位 {equity_weight_pct:.0f}%"
+            f"（周期框架原 {current_equity * 100:.0f}%），已按估值调整各类占比")
+    return adjusted, note
+
+
 def get_allocation_chart_data(allocation: list[AllocationItem]) -> dict:
     """生成 ECharts 图表数据"""
     # 玫瑰图数据

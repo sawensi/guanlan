@@ -13,6 +13,7 @@ function switchStrategyTab(tab) {
   var stratsList = $('strategiesList');
   var exitsContainer = $('exitsContainer');
   var stratStatusBar = $('stratStatusBar');
+  var decisionOverview = $('decisionOverview');
 
   if (tab === 'entry') {
     tabEntry.classList.add('active');
@@ -20,13 +21,16 @@ function switchStrategyTab(tab) {
     stratsList.style.display = '';
     exitsContainer.style.display = 'none';
     stratStatusBar.style.display = '';
+    if (decisionOverview) decisionOverview.style.display = '';
     if (!APP.strats) { loadStrats(); }
+    loadDecisionOverview();
   } else {
     tabEntry.classList.remove('active');
     tabExit.classList.add('active');
     stratsList.style.display = 'none';
     exitsContainer.style.display = '';
     stratStatusBar.style.display = 'none';
+    if (decisionOverview) decisionOverview.style.display = 'none';
     // 自动加载（如果还没加载过）
     if (!EXIT_STATE || !EXIT_STATE.data) {
       applyExitParams();
@@ -49,6 +53,60 @@ async function loadStrats() {
   }
   APP.strats = data;
   renderStrats(data);
+}
+
+// ── 信号一致性面板 ──────────────────────────────
+
+async function loadDecisionOverview() {
+  const el = $('decisionOverview');
+  if (!el) return;
+  const data = await get('/decision-overview');
+  if (!data || !data.entry_consensus) {
+    el.innerHTML = '';
+    return;
+  }
+  renderDecisionOverview(data);
+}
+
+function renderDecisionOverview(data) {
+  const el = $('decisionOverview');
+  if (!el) return;
+  const ec = data.entry_consensus || {};
+  const v = data.valuation || {};
+
+  const bullish = ec.consensus === '偏多共识';
+  const bearish = ec.consensus === '偏空共识';
+  const sigColor = bullish ? '#2c5f2d' : bearish ? '#d94444' : '#e0882e';
+  const sigBg = bullish ? '#e8f5e9' : bearish ? '#fce4e4' : '#fef3e0';
+  const sigIcon = bullish ? '🟢' : bearish ? '🔴' : '🟡';
+
+  const badgeMap = { '买入':'badge-buy', '卖出':'badge-sell', '持有':'badge-hold', '观望':'badge-wait' };
+
+  const votesHtml = (ec.votes || []).map(function(x) {
+    return '<span style="display:inline-flex;align-items:center;gap:4px;background:#f5f6f8;border-radius:14px;padding:3px 10px;font-size:.78rem;">' +
+      '<span class="badge ' + (badgeMap[x.signal] || 'badge-wait') + '">' + escHtml(x.signal) + '</span>' +
+      escHtml(x.strategy_name) + ' · ' + Math.round((x.confidence || 0) * 100) + '%</span>';
+  }).join('');
+
+  const reasonsHtml = (ec.key_reasons || []).map(function(r) {
+    return '<li style="margin:3px 0;">' + escHtml(r) + '</li>';
+  }).join('');
+
+  const posLine = (v.equity_weight > 0 ? ' · 建议股票仓位 ' + Math.round(v.equity_weight) + '%' : '');
+
+  el.innerHTML =
+    '<div style="background:#fff;border:1px solid #eee;border-radius:12px;padding:14px 16px;margin-bottom:14px;">' +
+      '<div style="display:flex;align-items:center;gap:10px;background:' + sigBg + ';border-radius:8px;padding:10px 14px;">' +
+        '<span style="font-size:1.3rem;">' + sigIcon + '</span>' +
+        '<div style="flex:1;">' +
+          '<div style="font-weight:700;color:' + sigColor + ';">入场信号一致性 · ' + escHtml(ec.consensus) + '（' + (ec.score != null ? ec.score : '--') + '分）</div>' +
+          '<div style="font-size:.78rem;color:#666;">' + escHtml(ec.recommendation || '') +
+            ' · 周期 ' + escHtml(data.cycle || '—') + posLine + '</div>' +
+        '</div>' +
+      '</div>' +
+      '<div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:10px;">' + votesHtml + '</div>' +
+      (reasonsHtml ? '<ul style="margin:10px 0 0 18px;font-size:.78rem;color:#555;">' + reasonsHtml + '</ul>' : '') +
+    '</div>';
 }
 
 function _setStratTime(lastUpdated) {

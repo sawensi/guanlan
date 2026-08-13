@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>观澜 · 投资辅助</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<!-- ====== 顶部标题栏 ====== -->
+<header class="app-header">
+  <div class="header-inner">
+    <span class="header-icon">🌊</span>
+    <div>
+      <div class="header-title">观澜</div>
+      <div class="header-sub">宏观周期 · 资产配置 · 量化策略</div>
+    </div>
+  </div>
+</header>
+
+<!-- 数据质量警告横幅 -->
+<div class="data-quality-banner" id="dataQualityBanner" style="display:none;">
+  <span class="banner-icon">⚠️</span>
+  <span class="banner-text" id="dataQualityText"></span>
+  <button class="banner-close" onclick="dismissQualityBanner()">×</button>
+</div>
+
+<!-- ====== 主内容区 ====== -->
+<main class="app-main">
+
+  <!-- ═══ 仪表盘页面 ═══ -->
+  <section class="page active" id="page-dashboard">
+
+    <!-- 数据状态栏 -->
+    <div class="data-status-bar" id="dashStatusBar">
+      <span class="data-status-time" id="dashUpdateTime">加载中...</span>
+      <button class="btn-refresh" id="btnRefreshDash" onclick="refreshDashNow()">🔄 刷新宏观数据</button>
+    </div>
+
+    <!-- 周期卡片 -->
+    <div class="card">
+      <div class="card-label">📍 经济周期定位</div>
+      <div class="cycle-row">
+        <div class="cycle-badge" id="cycleBadge">--</div>
+        <div class="cycle-detail">
+          <div class="cycle-name" id="cycleName">加载中...</div>
+          <div class="cycle-conf">
+            <span class="conf-label">置信度</span>
+            <span class="conf-val" id="confVal">--</span>
+            <span class="conf-sub" id="confSub"></span>
+          </div>
+          <div class="cycle-mtm">
+            <span>增长 <b id="gMtm">--</b></span>
+            <span class="dot-divider">·</span>
+            <span>通胀 <b id="iMtm">--</b></span>
+          </div>
+        </div>
+      </div>
+      <div class="cycle-explain" id="cycleExplain"></div>
+    </div>
+
+    <!-- 指标卡片组 -->
+    <div class="indicators-row" id="indicatorsRow">
+      <div class="skeleton-ind"></div><div class="skeleton-ind"></div>
+      <div class="skeleton-ind"></div><div class="skeleton-ind"></div>
+    </div>
+
+    <!-- 资产配置图 -->
+    <div class="card">
+      <div class="card-label">🎯 资产配置占比建议</div>
+      <div class="chart-box" id="roseChart">
+        <div class="chart-skeleton">图表加载中...</div>
+      </div>
+      <div class="alloc-list" id="allocList"></div>
+    </div>
+
+    <!-- 四象限图 -->
+    <div class="card">
+      <div class="card-label">🧭 周期四象限定位</div>
+      <div class="chart-box chart-sm" id="quadrantChart">
+        <div class="chart-skeleton">图表加载中...</div>
+      </div>
+      <div class="quadrant-explain" id="quadrantExplain"></div>
+    </div>
+
+    <!-- 沪深300 PE 走势图 -->
+    <div class="card">
+      <div class="card-label">
+        <span>📈 沪深300近3年PE（市盈率）走势</span>
+        <button class="btn-refresh" onclick="refreshCsi300PeNow()">🔄 刷新</button>
+      </div>
+      <div class="chart-box" id="csi300PeChart">
+        <div class="chart-skeleton">图表加载中...</div>
+      </div>
+    </div>
+
+    <!-- 估值温度计 -->
+    <div class="card" id="valuationCard">
+      <div class="card-label">🌡️ 估值温度计</div>
+      <div id="valuationContent">
+        <div class="loading-shimmer">分析中...</div>
+      </div>
+    </div>
+
+    <!-- 资金流向卡片 -->
+    <div class="card" id="fundFlowCard">
+      <div class="card-label">
+        <span>💰 资金流向</span>
+        <span class="card-label-right">
+          <span class="fundflow-time" id="fundFlowTime">--</span>
+          <button class="btn-refresh" onclick="refreshFundFlowNow()">🔄 刷新</button>
+        </span>
+      </div>
+      <!-- 行业板块资金流向 -->
+      <div class="fundflow-section">
+        <div class="fundflow-section-title">📊 行业板块资金净流入 Top / Bottom 10</div>
+        <div class="chart-box" id="sectorFlowChart">
+          <div class="chart-skeleton">图表加载中...</div>
+        </div>
+      </div>
+      <!-- 个股主力资金 -->
+      <div class="fundflow-section">
+        <div class="fundflow-section-title">🔥 个股主力资金净流入 Top 10（亿元）</div>
+        <div class="chart-box" id="stockFlowChart">
+          <div class="chart-skeleton">图表加载中...</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 推荐标的卡片 -->
+    <div class="card" id="recommendationsCard">
+      <div class="card-label">💡 推荐标的</div>
+      <div id="recommendationsContent">
+        <div class="loading-shimmer">分析中...</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══ 每日解读页面 ═══ -->
+  <section class="page" id="page-insights">
+    <div class="card">
+      <div class="card-label">
+        <span>📰 每日解读 · 投资明见</span>
+        <button class="btn-refresh" id="btnRefreshInsights" onclick="refreshInsightsNow()">🔄 刷新</button>
+      </div>
+      <div class="insights-meta" id="insightsMeta"></div>
+      <div class="stance-banner" id="stanceBanner" style="display:none;"></div>
+
+      <!-- 上半部分：文章原文 -->
+      <div id="articlesContent">
+        <div class="loading-shimmer">正在加载文章...</div>
+      </div>
+
+      <!-- 分隔线 -->
+      <div class="insights-divider" id="insightsDivider" style="display:none;">
+        <span>🤖 AI 深度解读</span>
+      </div>
+
+      <!-- 下半部分：LLM 解读 -->
+      <div class="markdown-body" id="llmInterpretation" style="display:none;"></div>
+
+      <!-- 历史记录（近3次以外的文章） -->
+      <div class="articles-history" id="articlesHistory" style="display:none;">
+        <div class="history-header" onclick="toggleHistory()">
+          <span class="history-title" id="historyTitle">📚 历史记录</span>
+          <span class="history-arrow" id="historyArrow">▶</span>
+        </div>
+        <div class="history-list" id="historyList" style="display:none;"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══ 量化策略页面 ═══ -->
+  <section class="page" id="page-strategies">
+    <!-- 数据状态栏 -->
+    <div class="data-status-bar" id="stratStatusBar">
+      <span class="data-status-time" id="stratUpdateTime">加载中...</span>
+      <button class="btn-refresh" id="btnRefreshStrats" onclick="refreshStratsNow()">🔄 刷新策略信号</button>
+    </div>
+
+    <!-- 标签切换 -->
+    <div class="strategy-tabs">
+      <button class="strategy-tab active" id="tabEntry" onclick="switchStrategyTab('entry')">
+        📈 入场策略
+      </button>
+      <button class="strategy-tab" id="tabExit" onclick="switchStrategyTab('exit')">
+        🚪 离场策略
+      </button>
+    </div>
+
+    <!-- 入场策略列表 -->
+    <div id="strategiesList">
+      <div class="loading-shimmer">正在加载策略...</div>
+    </div>
+
+    <!-- 离场策略容器（初始隐藏） -->
+    <div id="exitsContainer" style="display:none;">
+      <!-- 基金参数表单 -->
+      <div class="entry-params">
+        <div class="entry-params-row">
+          <label>基金代码</label>
+          <input type="text" id="exitFundCode" placeholder="如 510300"
+                 value="510300" style="width:100px;">
+        </div>
+        <div class="entry-params-row">
+          <label>入场净值</label>
+          <input type="number" id="exitEntryPrice" placeholder="选填"
+                 step="0.01" style="width:100px;">
+        </div>
+        <div class="entry-params-row">
+          <label>入场日期</label>
+          <input type="date" id="exitEntryDate" style="width:140px;">
+        </div>
+        <div class="entry-params-row">
+          <label>收益率%</label>
+          <input type="number" id="exitReturnRate" placeholder="选填，如 15"
+                 step="0.1" style="width:100px;">
+          <small style="color:var(--text-3)">（直接填盈亏%，优先于入场净值）</small>
+        </div>
+        <button class="btn-apply-params" onclick="applyExitParams()">🔍 查询离场信号</button>
+      </div>
+
+      <!-- 离场策略列表 -->
+      <div id="exitsList">
+        <div class="loading-shimmer">输入基金代码后点击查询...</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══ 选股页面 ═══ -->
+  <section class="page" id="page-rankings">
+    <div class="card">
+      <div class="card-label">
+        <span>📋 每日选股 Top 50</span>
+        <span class="card-label-right">
+          <button class="btn-refresh" id="btnRefreshRankings" onclick="refreshRankingsNow()">🔄 刷新</button>
+        </span>
+      </div>
+      <div class="ranking-note">
+        筛选条件：PB &lt; 2 · 排除ST/*ST · 财务健康度调整 · 权重可调<br><small style="color:var(--text-3)">净利率=单季度净利润/营收（非TTM口径），与同花顺等平台可能不同</small>
+      </div>
+      <!-- 权重滑块 -->
+      <div class="weight-sliders" id="weightSliders">
+        <div class="weight-row"><label>主营增长率</label><input type="range" min="0" max="100" value="25" oninput="onWeightChange()"><span>25%</span></div>
+        <div class="weight-row"><label>主营利润率</label><input type="range" min="0" max="100" value="20" oninput="onWeightChange()"><span>20%</span></div>
+        <div class="weight-row"><label>净利润率</label><input type="range" min="0" max="100" value="25" oninput="onWeightChange()"><span>25%</span></div>
+        <div class="weight-row"><label>低PE</label><input type="range" min="0" max="100" value="20" oninput="onWeightChange()"><span>20%</span></div>
+        <div class="weight-row"><label>低PB</label><input type="range" min="0" max="100" value="10" oninput="onWeightChange()"><span>10%</span></div>
+        <button class="btn-apply-weights" id="btnApplyWeights" onclick="applyWeights()">应用权重重新排名</button>
+      </div>
+      <!-- 全量 Top 50 -->
+      <div class="ranking-subsection">
+        <div class="ranking-subtitle">📊 全量 Top 50 <span class="ranking-meta" id="rankingsMetaAll"></span></div>
+        <div class="ranking-subnote">PB &lt; 2 · 去ST（不做国企/金融过滤）</div>
+        <div class="ranking-table-wrap" id="rankingsTableWrapAll">
+          <div class="loading-shimmer">正在加载排名...</div>
+        </div>
+      </div>
+      <!-- 民企 Top 50 -->
+      <div class="ranking-subsection" style="margin-top:24px;">
+        <div class="ranking-subtitle">🏢 民企 Top 50 <span class="ranking-meta" id="rankingsMeta"></span></div>
+        <div class="ranking-subnote">排除国企/央企 · 排除金融（银行/证券/保险/多元金融）</div>
+        <div class="ranking-table-wrap" id="rankingsTableWrap">
+          <div class="loading-shimmer">正在加载排名...</div>
+        </div>
+      </div>
+      <div class="ranking-disclaimer">
+        ⚠️ 数据来源：新浪财经 + 东方财富 + 巨潮资讯（通过 AKShare），仅供参考，不构成投资建议。数据每日 15:30 后自动更新。
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══ 策略回测页面 ═══ -->
+  <section class="page" id="page-backtest">
+    <div class="card">
+      <div class="card-label">⏪ 策略回测</div>
+      <div class="card-sub">基于历史数据的 walk-forward 模拟，无未来信息泄露。测试入场+离场策略组合的历史表现。</div>
+
+      <!-- 参数表单 -->
+      <div class="bt-form">
+        <div class="bt-form-row">
+          <div class="bt-form-group">
+            <label>ETF/基金</label>
+            <input type="text" id="btFundCode" value="510300" list="btEtfList" style="width:110px;">
+            <datalist id="btEtfList">
+              <option value="510300">沪深300ETF</option>
+              <option value="510500">中证500ETF</option>
+              <option value="159915">创业板ETF</option>
+              <option value="512890">中证红利ETF</option>
+              <option value="518880">黄金ETF</option>
+              <option value="511010">国债ETF</option>
+              <option value="588000">科创50ETF</option>
+            </datalist>
+          </div>
+          <div class="bt-form-group">
+            <label>入场策略</label>
+            <select id="btEntryStrategy">
+              <option value="dual-ma-trend">趋势跟踪</option>
+              <option value="rsrs-momentum">涨跌力度比较</option>
+              <option value="grid-trading">网格自动买卖</option>
+              <option value="merrill-rotation">经济周期轮动</option>
+              <option value="dividend-lowvol">红利低波</option>
+              <option value="risk-parity">风险均衡配置</option>
+              <option value="dca">定投策略</option>
+            </select>
+          </div>
+          <div class="bt-form-group bt-exit-group">
+            <label>离场策略（可多选）</label>
+            <div class="bt-exit-checkbox-grid" id="btExitCheckboxes"></div>
+            <div class="bt-exit-actions">
+              <button type="button" class="bt-mini-btn" id="btExitSelectAll">全选</button>
+              <button type="button" class="bt-mini-btn" id="btExitClearAll">清空</button>
+            </div>
+            <div class="bt-exit-hint">选 1 个 → 单策略视图；选多个 → 叠加对比图 + 指标对比表。「黄金离场/徐小明解读」较依赖特定标的，普通 ETF 上可能不触发。</div>
+          </div>
+        </div>
+        <div class="bt-form-row">
+          <div class="bt-form-group">
+            <label>起始日期</label>
+            <input type="date" id="btStartDate" value="2021-01-01">
+          </div>
+          <div class="bt-form-group">
+            <label>结束日期</label>
+            <input type="date" id="btEndDate" value="2025-12-31">
+          </div>
+          <div class="bt-form-group">
+            <label>初始资金</label>
+            <input type="number" id="btCapital" value="100000" step="10000" style="width:110px;">
+          </div>
+          <div class="bt-form-group">
+            <label>仓位比例</label>
+            <input type="number" id="btPositionSize" value="1.0" step="0.1" min="0.1" max="1.0" style="width:80px;">
+          </div>
+          <div class="bt-form-group">
+            <label>周期假设</label>
+            <select id="btCycle">
+              <option value="复苏期">复苏期</option>
+              <option value="过热期">过热期</option>
+              <option value="滞胀期">滞胀期</option>
+              <option value="衰退期">衰退期</option>
+            </select>
+          </div>
+        </div>
+        <div class="bt-form-actions">
+          <button id="btRunBtn" class="btn-primary" onclick="runBacktest()">▶ 运行回测</button>
+          <small>注意：回测结果不代表未来表现</small>
+        </div>
+      </div>
+
+      <!-- 离场策略说明 -->
+      <div id="btStrategyInfo" class="bt-strategy-info" style="display:none;"></div>
+
+      <!-- 错误提示 -->
+      <div id="btError" style="display:none;" class="bt-error"></div>
+
+      <!-- 结果容器 -->
+      <div id="btResults" style="display:none;"></div>
+    </div>
+
+    <!-- 免责声明 -->
+    <div class="bt-disclaimer">
+      <strong>ⓘ 回测免责声明</strong><br>
+      1. 回测基于历史数据模拟，不包含实际交易中的滑点、流动性冲击等成本。<br>
+      2. 宏观周期假设为固定值，未回放完整的宏观分析管道——周期依赖型策略的回测结果仅供参考。<br>
+      3. 过去的表现不代表未来收益。本工具仅供学习研究，不构成投资建议。
+    </div>
+  </section>
+
+</main>
+
+<!-- ====== 底部导航 ====== -->
+<nav class="bottom-nav">
+  <button class="nav-btn active" data-page="dashboard">
+    <span class="nav-icon">📊</span>
+    <span class="nav-label">宏观</span>
+  </button>
+  <button class="nav-btn" data-page="insights">
+    <span class="nav-icon">📰</span>
+    <span class="nav-label">解读</span>
+  </button>
+  <button class="nav-btn" data-page="strategies">
+    <span class="nav-icon">📈</span>
+    <span class="nav-label">策略</span>
+  </button>
+  <button class="nav-btn" data-page="rankings">
+    <span class="nav-icon">📋</span>
+    <span class="nav-label">选股</span>
+  </button>
+  <button class="nav-btn" data-page="backtest">
+    <span class="nav-icon">⏪</span>
+    <span class="nav-label">回测</span>
+  </button>
+</nav>
+
+<!-- 脚本：defer 不阻塞渲染，本地 echarts 0ms 加载 -->
+<script src="lib/echarts.min.js" defer></script>
+<script src="js/app.js" defer></script>
+<script src="js/dashboard.js" defer></script>
+<script src="js/insights.js" defer></script>
+<script src="js/strategies.js" defer></script>
+<script src="js/exits.js" defer></script>
+<script src="js/rankings.js" defer></script>
+<script src="js/backtest.js" defer></script>
+</body>
+</html>

@@ -1,0 +1,14 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# 缓存数据（cron 定时刷新，可重新生成）
+backend/data/
+
+# 编辑器/系统
+.DS_Store
+*.swp
+.claude/

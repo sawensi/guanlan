@@ -242,7 +242,7 @@ def _check_exit_signal(strategy_id: str, fund_data: dict,
 
 def _compute_metrics(equity_curve: list[dict], trade_log: list[dict],
                      initial_capital: float, benchmark_curve: list[float],
-                     trading_days: int) -> dict:
+                     trading_days: int, risk_free_rate: float = 0.02) -> dict:
     """
     根据权益曲线和交易日志计算绩效指标。
     """
@@ -252,6 +252,8 @@ def _compute_metrics(equity_curve: list[dict], trade_log: list[dict],
             "max_drawdown_pct": 0.0, "max_drawdown_duration_days": 0,
             "win_rate_pct": 0.0, "profit_factor": 0.0, "total_trades": 0,
             "benchmark_return_pct": 0.0, "alpha_pct": 0.0,
+            "calmar_ratio": 0.0, "sortino_ratio": 0.0,
+            "annualized_volatility_pct": 0.0, "max_consecutive_losses": 0,
         }
 
     final_equity = equity_curve[-1]["equity"]
@@ -274,15 +276,29 @@ def _compute_metrics(equity_curve: list[dict], trade_log: list[dict],
         if prev > 0:
             daily_returns.append((cur - prev) / prev)
 
+    sortino_ratio = 0.0
+    annualized_vol_pct = 0.0
     if len(daily_returns) > 5:
         mean_ret = sum(daily_returns) / len(daily_returns)
         variance = sum((r - mean_ret) ** 2 for r in daily_returns) / len(daily_returns)
         std_ret = variance ** 0.5
-        risk_free_daily = 0.02 / 252  # 2% annual risk-free
+        risk_free_daily = risk_free_rate / 252
         if std_ret > 0:
             sharpe_ratio = round((mean_ret - risk_free_daily) / std_ret * (252 ** 0.5), 2)
         else:
             sharpe_ratio = 0.0
+
+        # 年化波动率
+        annualized_vol_pct = round(std_ret * (252 ** 0.5) * 100, 2)
+
+        # Sortino：下行标准差（相对无风险利率的下方偏差）
+        downside = [min(0.0, r - risk_free_daily) for r in daily_returns]
+        downside_var = sum(d * d for d in downside) / len(downside)
+        downside_std = downside_var ** 0.5
+        if downside_std > 0:
+            sortino_ratio = round((mean_ret - risk_free_daily) / downside_std * (252 ** 0.5), 2)
+        else:
+            sortino_ratio = 0.0
     else:
         sharpe_ratio = 0.0
 
@@ -325,6 +341,19 @@ def _compute_metrics(equity_curve: list[dict], trade_log: list[dict],
         999.0 if gross_profit > 0 else 0.0
     )
 
+    # 最长连续亏损交易次数（按交易发生顺序）
+    max_consecutive_losses = 0
+    cur_streak = 0
+    for t in completed_trades:
+        pnl_amt = t.get("pnl_amount")
+        pnl_pct = t.get("pnl_pct", 0) or 0
+        is_loss = (pnl_amt is not None and pnl_amt < 0) or (pnl_amt is None and pnl_pct <= 0)
+        if is_loss:
+            cur_streak += 1
+            max_consecutive_losses = max(max_consecutive_losses, cur_streak)
+        else:
+            cur_streak = 0
+
     # 基准收益 (buy-and-hold)
     if len(benchmark_curve) > 0:
         bench_start = benchmark_curve[0]
@@ -334,6 +363,12 @@ def _compute_metrics(equity_curve: list[dict], trade_log: list[dict],
         benchmark_return_pct = 0.0
 
     alpha_pct = round(total_return_pct - benchmark_return_pct, 2)
+
+    # Calmar = 年化收益 / 最大回撤绝对值（回撤为 0 时记 0）
+    if max_drawdown_pct > 0:
+        calmar_ratio = round(cagr_pct / max_drawdown_pct, 2)
+    else:
+        calmar_ratio = 0.0
 
     return {
         "total_return_pct": total_return_pct,
@@ -346,6 +381,10 @@ def _compute_metrics(equity_curve: list[dict], trade_log: list[dict],
         "total_trades": total_trades,
         "benchmark_return_pct": benchmark_return_pct,
         "alpha_pct": alpha_pct,
+        "calmar_ratio": calmar_ratio,
+        "sortino_ratio": sortino_ratio,
+        "annualized_volatility_pct": annualized_vol_pct,
+        "max_consecutive_losses": max_consecutive_losses,
     }
 
 
@@ -492,8 +531,10 @@ def _simulate(
     initial_capital: float = 100000.0,
     position_size: float = 1.0,
     transaction_cost: float = 0.0003,
+    slippage: float = 0.0005,
     min_holding_days: int = 5,
     cycle_assumption: str = "复苏期",
+    risk_free_rate: float = 0.02,
     precomputed_snapshots: list | None = None,
     precomputed_fund_scalars: list | None = None,
 ) -> dict:
@@ -529,12 +570,12 @@ def _simulate(
     from exit_strategies import _redemption_fee
 
     def buy_cost() -> float:
-        return 0.0015 if fund_type == "open" else transaction_cost
+        return 0.0015 if fund_type == "open" else (transaction_cost + slippage)
 
     def sell_cost(holding_days) -> float:
         if fund_type == "open":
             return _redemption_fee(holding_days) / 100.0
-        return transaction_cost
+        return transaction_cost + slippage
 
     # 基准：buy-and-hold 的收盘价序列（用于对比图表）
     base_close = closes[start_idx] if start_idx < n else 0
@@ -718,16 +759,22 @@ def _simulate(
 
     final_equity = equity_curve[-1]["equity"] if equity_curve else initial_capital
     metrics = _compute_metrics(equity_curve, trade_log, initial_capital,
-                                benchmark_closes, trading_days)
+                                benchmark_closes, trading_days, risk_free_rate)
 
     # 数据来源说明（回测数字诚实化：价格指数/QDII 代理等提示）
     data_note = None
     if fund_type == "qdii":
         data_note = "QDII 标的为境内指数代理，非真实海外净值"
     elif fund_type in ("etf", "index"):
-        data_note = "价格指数数据，未含分红再投资"
+        # 红利/债券类标的的核心收益来自分红/票息再投资，价格指数会系统性低估
+        div_or_bond = (fund_code in ("512890", "512880", "sh000922")
+                       or "红利" in fund_name or "债" in fund_name)
+        if div_or_bond:
+            data_note = "红利/债券为价格指数，未含分红/票息再投资——回测收益显著低于真实 ETF 表现（红利再投年化约+2~3%）"
+        else:
+            data_note = "价格指数数据，未含分红再投资"
     elif fund_type == "gold":
-        data_note = "黄金现货价格，未含申赎成本"
+        data_note = "黄金现货价格，未含 ETF 管理费(~0.5%/年)与二级市场折溢价"
 
     return {
         "fund_code": fund_code,
@@ -757,8 +804,10 @@ def run_backtest(
     position_size: float = 1.0,
     warmup_days: int = 120,
     transaction_cost: float = 0.0003,
+    slippage: float = 0.0005,
     min_holding_days: int = 5,
     cycle_assumption: str = "复苏期",
+    risk_free_rate: float = 0.02,
 ) -> dict:
     """
     主回测函数：walk-forward 模拟（单入场+单离场）。
@@ -773,14 +822,23 @@ def run_backtest(
         position_size: 每次买入仓位比例 (0~1)
         warmup_days: 热身天数（不产生交易信号）
         transaction_cost: 单边交易成本（默认 0.03%）
+        slippage: 滑点（默认 0.05%，非开放式基金计入）
         min_holding_days: 最短持有天数（期间不检查离场）
         cycle_assumption: 宏观周期假设
+        risk_free_rate: 无风险利率（用于 Sharpe/Sortino，默认 2%）
 
     返回:
         dict: 包含 metrics, equity_curve, trade_log 等
     """
     history = _load_history(fund_code, warmup_days)
     start_idx, end_idx = _locate_range(history["dates"], start_date, end_date, warmup_days)
+
+    # 预计算策略无关快照（单策略也复用，避免 O(n²) 重复切片计算）
+    entry_snapshots = _precompute_entry_snapshots(history["closes"], history["highs"],
+                                                   history["lows"], start_idx, end_idx)
+    fund_scalars = _precompute_fund_scalars(history["closes"], history["highs"],
+                                             history["lows"], start_idx, end_idx)
+
     return _simulate(
         fund_code=fund_code,
         fund_name=history["fund_name"],
@@ -797,8 +855,12 @@ def run_backtest(
         initial_capital=initial_capital,
         position_size=position_size,
         transaction_cost=transaction_cost,
+        slippage=slippage,
         min_holding_days=min_holding_days,
         cycle_assumption=cycle_assumption,
+        risk_free_rate=risk_free_rate,
+        precomputed_snapshots=entry_snapshots,
+        precomputed_fund_scalars=fund_scalars,
     )
 
 
@@ -812,8 +874,10 @@ def run_backtest_multi_exit(
     position_size: float = 1.0,
     warmup_days: int = 120,
     transaction_cost: float = 0.0003,
+    slippage: float = 0.0005,
     min_holding_days: int = 5,
     cycle_assumption: str = "复苏期",
+    risk_free_rate: float = 0.02,
 ) -> dict:
     """
     单入场 + 多离场策略对比回测：拉取一次行情数据，对每个离场策略独立模拟，
@@ -860,8 +924,10 @@ def run_backtest_multi_exit(
             initial_capital=initial_capital,
             position_size=position_size,
             transaction_cost=transaction_cost,
+            slippage=slippage,
             min_holding_days=min_holding_days,
             cycle_assumption=cycle_assumption,
+            risk_free_rate=risk_free_rate,
             precomputed_snapshots=entry_snapshots,
             precomputed_fund_scalars=fund_scalars,
         ))

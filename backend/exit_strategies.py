@@ -1578,14 +1578,27 @@ def _signal_gold_exit(fund_data: dict, entry_price: float | None,
     # 条件 ②: 均线死叉 (权重 25%)
     cond_ma_death = "死叉" in ma_status or ma_status == "空头排列"
 
-    # 条件 ③: 实际利率上升 — 使用替代指标 (权重 20%)
-    # 当前版本：PPI 下行 + 周期过热 → 通胀预期降 + 利率可能升高
-    # 更精确的实现需对接 PPI 和国债收益率数据
-    cond_real_rate = current_cycle in ("过热期", "滞胀期")
+    # 条件 ③: 实际利率上升 — 名义利率上行（PPI 下行+利率升的简化代理）(权重 20%)
+    bond_10y = fund_data.get("bond_10y")
+    bond_10y_prev = fund_data.get("bond_10y_prev")
+    if bond_10y is not None and bond_10y_prev is not None:
+        cond_real_rate = bond_10y > bond_10y_prev
+        real_rate_current = f"10Y国债 {bond_10y}% vs 前值 {bond_10y_prev}%"
+        real_rate_threshold = "10Y收益率上行"
+    else:
+        # 无真实利率数据时回退到周期推断（保持原行为）
+        cond_real_rate = current_cycle in ("过热期", "滞胀期")
+        real_rate_current = f"{current_cycle}(周期推断)"
+        real_rate_threshold = "过热期或滞胀期"
 
-    # 条件 ④: 美元走强 — USD/CNY 近期上涨 (权重 10%)
-    # 当前版本用简化判断，后续可接汇率 API
-    cond_usd_strong = False  # 默认，后续扩展
+    # 条件 ④: 美元走强 — USD/CNY 月涨 > 1.5% (权重 10%)
+    usd_chg = fund_data.get("usdcny_change_1m")
+    if usd_chg is not None:
+        cond_usd_strong = usd_chg > 1.5
+        usd_current = f"USD/CNY 月涨{usd_chg:+.2f}%"
+    else:
+        cond_usd_strong = False
+        usd_current = "待接入"
 
     # 条件 ⑤: 宏观周期不利 (权重 10%)
     cond_cycle_bad = current_cycle in ("复苏期", "过热期")
@@ -1598,12 +1611,12 @@ def _signal_gold_exit(fund_data: dict, entry_price: float | None,
         ExitConditionDetail(name="② 均线死叉",
                              met=cond_ma_death, weight=25,
                              current=ma_status, threshold="死叉或空头排列"),
-        ExitConditionDetail(name="③ 实际利率上升 (周期推断)",
+        ExitConditionDetail(name="③ 实际利率上升",
                              met=cond_real_rate, weight=20,
-                             current=current_cycle, threshold="过热期或滞胀期"),
+                             current=real_rate_current, threshold=real_rate_threshold),
         ExitConditionDetail(name="④ 美元走强 (USD/CNY月涨>1.5%)",
                              met=cond_usd_strong, weight=10,
-                             current="待接入", threshold="USD/CNY月涨>1.5%"),
+                             current=usd_current, threshold="USD/CNY月涨>1.5%"),
         ExitConditionDetail(name="⑤ 宏观周期不利",
                              met=cond_cycle_bad, weight=10,
                              current=current_cycle, threshold="复苏期或过热期"),

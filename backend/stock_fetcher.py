@@ -177,6 +177,13 @@ def _get_data_date() -> str:
     return _LATEST_DATA_DATE
 
 
+def _ttm_component_dates(date_str: str) -> tuple[str, str]:
+    """由报告期(YYYYMMDD)推导 TTM 需要的两个历史日期: 上年年报 + 上年同期"""
+    y = int(date_str[:4])
+    mmdd = date_str[4:]
+    return f"{y - 1}1231", f"{y - 1}{mmdd}"
+
+
 # ── 财务数据抓取 (东方财富 datacenter) ───────────────────
 
 async def _fetch_financial_data_batch() -> dict[str, dict]:
@@ -195,6 +202,27 @@ async def _fetch_financial_data_batch() -> dict[str, dict]:
         if df is None or len(df) == 0:
             print("[stock_fetcher] yjbb_em returned empty")
             return results
+
+        # TTM 组件：上年年报 + 上年同期累计每股收益（失败不阻断，PE 退化为累计口径）
+        prev_annual_date, prev_period_date = _ttm_component_dates(_get_data_date())
+        eps_prev_annual: dict[str, float] = {}
+        eps_prev_period: dict[str, float] = {}
+        for d, target in ((prev_annual_date, eps_prev_annual),
+                          (prev_period_date, eps_prev_period)):
+            try:
+                pdf = await asyncio.to_thread(ak.stock_yjbb_em, date=d)
+                if pdf is None or len(pdf) == 0:
+                    continue
+                for _, prow in pdf.iterrows():
+                    pcode = str(prow.get("股票代码", "")).strip()
+                    pv = prow.get("每股收益")
+                    if pcode and pv is not None and str(pv) != "nan":
+                        try:
+                            target[pcode] = float(pv)
+                        except (ValueError, TypeError):
+                            pass
+            except Exception as e:
+                print(f"[stock_fetcher] TTM component {d} fetch failed: {e}")
 
         for _, row in df.iterrows():
             try:
@@ -245,16 +273,28 @@ async def _fetch_financial_data_batch() -> dict[str, dict]:
                     except (ValueError, TypeError):
                         pass
 
-                # 每股收益 (用于计算 PE)
+                # 每股收益 (累计口径，用于计算 PE-TTM 与财务健康度)
                 eps = None
+                eps_cum = None
                 eps_val = row.get("每股收益")
                 if eps_val is not None and str(eps_val) != "nan":
                     try:
-                        eps = float(eps_val)
-                        if eps <= 0:
-                            eps = None  # 亏损企业 PE 无意义
+                        eps_cum = float(eps_val)
+                        if eps_cum > 0:
+                            eps = eps_cum   # 亏损企业 PE 无意义，累计 eps 置 None
                     except (ValueError, TypeError):
                         pass
+
+                # TTM 每股收益 = 当期累计 + 上年年报 - 上年同期累计
+                # （报告期累计 EPS 直接算 PE 会系统性偏低，Q1/Q2/Q3 尤其严重）
+                eps_ttm = None
+                if eps_cum is not None:
+                    pa = eps_prev_annual.get(code)
+                    pp = eps_prev_period.get(code)
+                    if pa is not None and pp is not None:
+                        eps_ttm = round(eps_cum + pa - pp, 4)
+                    else:
+                        eps_ttm = round(eps_cum, 4)
 
                 # 每股经营现金流量 (Operating CF per share) — 财务造假核心指标
                 cfps = None
@@ -293,6 +333,7 @@ async def _fetch_financial_data_batch() -> dict[str, dict]:
                     "net_margin": net_margin,
                     "book_value": book_value,
                     "eps": eps,
+                    "eps_ttm": eps_ttm,
                     "cfps": cfps,
                     "roe": roe,
                     "net_profit_growth": net_profit_growth,
@@ -426,6 +467,8 @@ async def _fetch_income_statement_batch() -> dict[str, dict]:
 SECTOR_CAP = 3           # 单板块最多 3 只
 FINANCIAL_CAP = 10       # 金融大类合计最多 10 只 (Top 50 时占比 20%)
 FINANCIAL_SECTORS = {"银行Ⅱ", "证券Ⅱ", "保险Ⅱ", "多元金融"}
+
+PB_MAX = 2.0             # 低PB池硬过滤阈值（可调；值越大纳入越多成长股）
 
 
 def _calculate_financial_health(stock: dict, cashflows: dict = None, income_stmts: dict = None) -> tuple[float, list[str]]:
@@ -617,7 +660,20 @@ def _score_and_rank(stocks: list[dict], cashflows: dict = None, income_stmts: di
     pgrow  = _safe_percentile(revenue_growth_vals, higher_is_better=True)
     pgross = _safe_percentile(gross_margin_vals, higher_is_better=True)
     pnet   = _safe_percentile(net_margin_vals, higher_is_better=True)
-    ppe    = _safe_percentile(pe_vals, higher_is_better=False)
+    # PE 特殊处理：亏损股(eps<=0) PE 无意义 → 记 0 分（最差）；真缺失 → 0.5 中性；有值 → 分位
+    pe_valid_idx = [i for i, v in enumerate(pe_vals) if v is not None]
+    pe_clean_ranks = _percentile_rank([pe_vals[i] for i in pe_valid_idx],
+                                      higher_is_better=False) if pe_valid_idx else []
+    ppe = [None] * len(stocks)
+    for pos, idx in enumerate(pe_valid_idx):
+        ppe[idx] = pe_clean_ranks[pos]
+    for i, s in enumerate(stocks):
+        if ppe[i] is None:
+            eps_ttm = s.get("eps_ttm")
+            if eps_ttm is not None and eps_ttm <= 0:
+                ppe[i] = 0.0   # 亏损股：低PE因子给最差分
+            else:
+                ppe[i] = 0.5   # 数据缺失：中性分
     ppb    = _safe_percentile(pb_vals, higher_is_better=False)
 
     scored = []
@@ -858,10 +914,11 @@ async def fetch_stock_rankings(force: bool = False) -> tuple[dict | None, str]:
         if fin.get("book_value") is not None and fin["book_value"] > 0:
             pb = round(price / fin["book_value"], 4)
 
-        # 计算 PE = 价格 / 每股收益
+        # 计算 PE-TTM = 价格 / 滚动12个月每股收益（避免累计口径低估 PE）
         pe = None
-        if fin.get("eps") is not None and fin["eps"] > 0:
-            pe = round(price / fin["eps"], 4)
+        eps_ttm = fin.get("eps_ttm")
+        if eps_ttm is not None and eps_ttm > 0:
+            pe = round(price / eps_ttm, 4)
 
         merged.append({
             "code": code,
@@ -870,6 +927,7 @@ async def fetch_stock_rankings(force: bool = False) -> tuple[dict | None, str]:
             "pb": pb,
             "pe": pe,
             "eps": fin.get("eps"),
+            "eps_ttm": eps_ttm,
             "revenue_growth": fin.get("revenue_growth"),
             "gross_margin": fin.get("gross_margin"),
             "net_margin": fin.get("net_margin"),
@@ -881,9 +939,9 @@ async def fetch_stock_rankings(force: bool = False) -> tuple[dict | None, str]:
 
     print(f"[stock_fetcher] Merged: {len(merged)} stocks with price+financials")
 
-    # 5. 过滤 PB < 2
-    filtered = [s for s in merged if s.get("pb") is not None and s["pb"] < 2.0]
-    print(f"[stock_fetcher] PB < 2 filter: {len(filtered)} / {len(merged)} stocks")
+    # 5. 过滤 PB < PB_MAX（默认 2.0，可调）
+    filtered = [s for s in merged if s.get("pb") is not None and s["pb"] < PB_MAX]
+    print(f"[stock_fetcher] PB < {PB_MAX} filter: {len(filtered)} / {len(merged)} stocks")
 
     if not filtered:
         # 防御性诊断: 可能是财报日期数据不完整导致 PB 无法计算
@@ -945,6 +1003,7 @@ async def fetch_stock_rankings(force: bool = False) -> tuple[dict | None, str]:
             "name": s.get("name", ""),
             "pb": s.get("pb", 0),
             "pe": s.get("pe"),
+            "eps_ttm": s.get("eps_ttm"),
             "revenue_growth": s.get("revenue_growth"),
             "gross_margin": s.get("gross_margin"),
             "net_margin": s.get("net_margin"),
@@ -970,6 +1029,7 @@ async def fetch_stock_rankings(force: bool = False) -> tuple[dict | None, str]:
             "pb": s.get("pb"),
             "pe": s.get("pe"),
             "eps": s.get("eps"),
+            "eps_ttm": s.get("eps_ttm"),
             "revenue_growth": s.get("revenue_growth"),
             "gross_margin": s.get("gross_margin"),
             "net_margin": s.get("net_margin"),

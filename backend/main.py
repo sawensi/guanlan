@@ -470,7 +470,9 @@ async def get_decision_overview(
     fund_code: str = Query(default=None, description="可选基金代码，传入则附离场共识"),
 ):
     """信号一致性面板：入场共识 + 周期阶段 + 估值信号 + 建议仓位（可选离场共识）"""
-    from quant_strategies import get_all_strategies, synthesize_entry_decision
+    from quant_strategies import (
+        get_all_strategies, synthesize_entry_decision, synthesize_dca_decision,
+    )
     from strategy_engine import compute_all_signals
 
     cycle_str = _latest_dashboard.get("cycle", "复苏期") if _latest_dashboard else "复苏期"
@@ -481,6 +483,9 @@ async def get_decision_overview(
     signals = compute_all_signals()
     strategies = get_all_strategies(cycle_str, signals)
     entry_consensus = synthesize_entry_decision(strategies)
+
+    # 1.5 定投档位共识（定投为主：其他策略只作为"投多少钱"的参考）
+    dca_consensus = synthesize_dca_decision(strategies, valuation)
 
     # 2. 可选离场共识（需拉取基金数据）
     exit_consensus = None
@@ -506,6 +511,7 @@ async def get_decision_overview(
         "cycle_confidence": cycle_conf,
         "valuation": valuation,
         "entry_consensus": entry_consensus,
+        "dca_consensus": dca_consensus,
         "exit_consensus": exit_consensus,
         "fund_code": fund_code,
         "generated_at": datetime.now().isoformat(),
@@ -1222,6 +1228,69 @@ async def run_backtest_compare_endpoint(
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"对比回测执行失败: {str(e)}")
+
+
+# ── 定投 (DCA) API ────────────────────────────────────
+
+@app.get("/guanlan/api/dca/decision")
+async def get_dca_decision():
+    """定投档位决策：综合各策略定投档位 + 估值温度计，输出本期定投倍数建议。"""
+    from quant_strategies import get_all_strategies, synthesize_dca_decision
+    from strategy_engine import compute_all_signals
+    from dca_engine import dca_target_exit
+
+    cycle_str = _latest_dashboard.get("cycle", "复苏期") if _latest_dashboard else "复苏期"
+    valuation = (_latest_dashboard or {}).get("valuation") or None
+
+    signals = compute_all_signals()
+    strategies = get_all_strategies(cycle_str, signals)
+    dca = synthesize_dca_decision(strategies, valuation)
+
+    # 定投止盈/再平衡建议（止盈导向，而非止损）
+    pe_pct = (valuation or {}).get("pe_percentile")
+    exit_sig = dca_target_exit(pe_pct, None)
+
+    return {
+        "cycle": cycle_str,
+        "valuation": valuation,
+        "dca": dca,
+        "exit_suggestion": exit_sig,
+        "generated_at": datetime.now().isoformat(),
+    }
+
+
+@app.get("/guanlan/api/dca/backtest")
+async def run_dca_backtest_endpoint(
+    fund_code: str = Query(default="510300", description="ETF/指数/基金/黄金代码"),
+    start_date: str = Query(default="2021-01-01", description="定投起始日期"),
+    end_date: str = Query(default="2025-12-31", description="定投结束日期"),
+    amount_per_period: float = Query(default=2000.0, ge=100, description="每期金额"),
+    period: str = Query(default="monthly", description="定投周期 monthly|weekly"),
+    subscription_fee_pct: float = Query(default=None, description="申购费率%(缺省按类型自动)"),
+    dividend_reinvest: bool = Query(default=True, description="分红再投资口径"),
+):
+    """定投回测：固定定投 vs 估值加码定投 vs 一次性买入 三模式对比（含 XIRR）。"""
+    from dca_engine import run_dca_backtest as _run_dca
+
+    if period not in ("monthly", "weekly"):
+        raise HTTPException(status_code=400, detail="period 仅支持 monthly 或 weekly")
+
+    try:
+        return _run_dca(
+            fund_code=fund_code,
+            start_date=start_date,
+            end_date=end_date,
+            amount_per_period=amount_per_period,
+            period=period,
+            subscription_fee_pct=subscription_fee_pct,
+            dividend_reinvest=dividend_reinvest,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"定投回测执行失败: {str(e)}")
 
 
 # ── 策略静态元信息 API ───────────────────────────────

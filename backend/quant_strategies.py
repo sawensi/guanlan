@@ -88,9 +88,9 @@ STRATEGY_DEFS = [
 ### 怎么用
 
 每天记录两个数据：当日最高价、当日最低价。
-然后把最近18天的数据放在一起，算一个叫"RSRS得分"的东西：
-- **得分高（>0.7）**：说明每次跌下去都有人接盘，支撑很强 → **持有或买入**
-- **得分低（<0.7）**：说明涨上去就被打下来，阻力很大 → **减仓或观望**
+然后把最近18天的数据放在一起，算一个叫"RSRS得分"的东西（压缩到 -1 ~ +1 之间）：
+- **得分高（>0.4）**：说明每次跌下去都有人接盘，支撑很强 → **持有或买入**
+- **得分低（≤0）**：说明涨上去就被打下来，阻力很大 → **减仓或观望**
 
 ### 多个品种比较
 
@@ -101,7 +101,7 @@ STRATEGY_DEFS = [
 这个方法由光大证券研发，在中国市场回测效果不错——比单纯持有沪深300每年多赚5-8%，跌的时候也少亏一些。适合每周或每两周调一次仓。
 """,
         "suitable_cycle": ["复苏期", "过热期", "衰退期"],
-        "rules": "RSRS得分>0.7 → 买入；<0.7 → 观望；买得分最高的品种",
+        "rules": "RSRS得分>0.4 → 买入；>0 → 持有；≤0 → 观望；买得分最高的品种",
         "frequency": "每周调一次",
         "risk_level": "中",
     },
@@ -303,16 +303,19 @@ def _signal_merrill(cycle: str, hs300: dict) -> StrategySignal:
     mom = hs300.get("momentum_1m")
     vol = hs300.get("volatility_60d")
     cycle_map = {
-        "复苏期": ("买入", 0.82, "经济回暖 + 盈利改善，股票配置价值高"),
-        "过热期": ("买入", 0.70, "通胀抬头，多配商品和周期股"),
-        "滞胀期": ("卖出", 0.68, "增长放缓 + 通胀高企，减少风险资产"),
-        "衰退期": ("持有", 0.75, "经济偏冷，债券和黄金是较好选择"),
+        "复苏期": ("买入", 0.82, "经济回暖 + 盈利改善，股票配置价值高", 1.5),
+        "过热期": ("买入", 0.70, "通胀抬头，多配商品和周期股", 1.0),
+        "滞胀期": ("卖出", 0.68, "增长放缓 + 通胀高企，减少风险资产", 0.5),
+        "衰退期": ("持有", 0.75, "经济偏冷，债券和黄金是较好选择", 0.5),
     }
-    sig, conf, reason = cycle_map.get(cycle, ("持有", 0.50, ""))
+    sig, conf, reason, dca_mult = cycle_map.get(cycle, ("持有", 0.50, "", 1.0))
     if mom is not None:
         reason += f" | 沪深300近1月{mom:+.1f}%，波动率{vol}%"
+    dca_reason = {"复苏期": "复苏期股票性价比高，本期可加码", "过热期": "过热期按计划定投即可",
+                  "滞胀期": "滞胀期风险资产承压，本期减码", "衰退期": "衰退期少投股票，现金留待低位"}
     return StrategySignal(strategy_id="merrill-rotation", strategy_name="经济周期轮动",
-                          signal=sig, confidence=conf, reasoning=reason)
+                          signal=sig, confidence=conf, reasoning=reason,
+                          dca_multiplier=dca_mult, dca_reason=dca_reason.get(cycle, "按计划定投"))
 
 
 def _signal_ma_trend(sh: dict, hs300: dict) -> StrategySignal:
@@ -324,14 +327,17 @@ def _signal_ma_trend(sh: dict, hs300: dict) -> StrategySignal:
         conf = 0.82 if "刚突破" in ma_status else 0.75
         return StrategySignal(strategy_id="dual-ma-trend", strategy_name="趋势跟踪",
             signal="买入", confidence=conf,
-            reasoning=f"MA20({ma20}) > MA60({ma60})，{ma_status}，趋势向上")
+            reasoning=f"MA20({ma20}) > MA60({ma60})，{ma_status}，趋势向上",
+            dca_multiplier=1.5, dca_reason="趋势向上，顺势加码定投")
     elif "死叉" in ma_status or ma_status == "空头排列":
         return StrategySignal(strategy_id="dual-ma-trend", strategy_name="趋势跟踪",
             signal="卖出", confidence=0.78,
-            reasoning=f"MA20({ma20}) < MA60({ma60})，{ma_status}，趋势向下")
+            reasoning=f"MA20({ma20}) < MA60({ma60})，{ma_status}，趋势向下",
+            dca_multiplier=0.5, dca_reason="趋势向下，本期减码等待企稳")
     else:
         return StrategySignal(strategy_id="dual-ma-trend", strategy_name="趋势跟踪",
-            signal="观望", confidence=0.55, reasoning=f"均线方向不明确，建议观望")
+            signal="观望", confidence=0.55, reasoning=f"均线方向不明确，建议观望",
+            dca_multiplier=1.0, dca_reason="方向不明，按计划定投")
 
 
 def _signal_rsrs(sh: dict, hs300: dict) -> StrategySignal:
@@ -340,17 +346,21 @@ def _signal_rsrs(sh: dict, hs300: dict) -> StrategySignal:
     zscore = sh.get("rsrs_zscore")
     if score is None:
         return StrategySignal(strategy_id="rsrs-momentum", strategy_name="涨跌力度比较",
-            signal="观望", confidence=0.50, reasoning="RSRS数据不足")
+            signal="观望", confidence=0.50, reasoning="RSRS数据不足",
+            dca_multiplier=1.0, dca_reason="数据不足，按计划定投")
     if score > 0.4:
         return StrategySignal(strategy_id="rsrs-momentum", strategy_name="涨跌力度比较",
             signal="买入", confidence=min(0.85, 0.6 + score * 0.3),
-            reasoning=f"RSRS得分{score:.3f}，{status}，上涨力度强")
+            reasoning=f"RSRS得分{score:.3f}，{status}，上涨力度强",
+            dca_multiplier=1.5, dca_reason="上涨力度强，本期加码")
     elif score > 0:
         return StrategySignal(strategy_id="rsrs-momentum", strategy_name="涨跌力度比较",
-            signal="持有", confidence=0.60, reasoning=f"RSRS得分{score:.3f}，{status}")
+            signal="持有", confidence=0.60, reasoning=f"RSRS得分{score:.3f}，{status}",
+            dca_multiplier=1.0, dca_reason="力度中性，按计划定投")
     else:
         return StrategySignal(strategy_id="rsrs-momentum", strategy_name="涨跌力度比较",
-            signal="观望", confidence=0.50, reasoning=f"RSRS得分{score:.3f}，{status}")
+            signal="观望", confidence=0.50, reasoning=f"RSRS得分{score:.3f}，{status}",
+            dca_multiplier=0.5, dca_reason="上涨力度不足，本期减码观望")
 
 
 def _signal_grid(sh: dict, cycle: str) -> StrategySignal:
@@ -360,20 +370,27 @@ def _signal_grid(sh: dict, cycle: str) -> StrategySignal:
     ma = sh.get("ma_status", "")
     if "金叉" in ma:
         return StrategySignal(strategy_id="grid-trading", strategy_name="网格自动买卖",
-            signal="观望", confidence=0.65, reasoning=f"趋势启动，不适合网格 | 区间{grid_l}-{grid_h}")
+            signal="观望", confidence=0.65, reasoning=f"趋势启动，不适合网格 | 区间{grid_l}-{grid_h}",
+            dca_multiplier=1.0, dca_reason="趋势启动，按计划定投")
     pos = "偏低" if close < (grid_l + grid_h) * 0.45 else           "偏高" if close > (grid_l + grid_h) * 0.55 else "中间"
+    # 定投档位：区间低位多投，高位少投（网格思想直接映射到定投档位）
+    dca_mult = 1.5 if pos == "偏低" else (0.5 if pos == "偏高" else 1.0)
+    dca_reason = f"当前处于60日区间{pos}位置" + ("，低位多攒份额" if pos == "偏低" else ("，高位少投" if pos == "偏高" else "，按计划定投"))
     return StrategySignal(strategy_id="grid-trading", strategy_name="网格自动买卖",
         signal="买入", confidence=0.68,
-        reasoning=f"60日区间{grid_l}-{grid_h}，当前{close}处于{pos}位置，适合网格")
+        reasoning=f"60日区间{grid_l}-{grid_h}，当前{close}处于{pos}位置，适合网格",
+        dca_multiplier=dca_mult, dca_reason=dca_reason)
 
 
 def _signal_risk_parity(sh: dict, hs300: dict, cycle: str) -> StrategySignal:
     vol = sh.get("volatility_60d", 15) or 15
     if vol > 25:
         return StrategySignal(strategy_id="risk-parity", strategy_name="风险均衡配置",
-            signal="持有", confidence=0.82, reasoning=f"波动率偏高({vol}%)，均衡配置抗跌优势明显")
+            signal="持有", confidence=0.82, reasoning=f"波动率偏高({vol}%)，均衡配置抗跌优势明显",
+            dca_multiplier=1.0, dca_reason="高波动下按计划均衡定投")
     return StrategySignal(strategy_id="risk-parity", strategy_name="风险均衡配置",
-        signal="持有", confidence=0.72, reasoning=f"当前波动率{vol}%，全天候配置在不同周期下均有表现")
+        signal="持有", confidence=0.72, reasoning=f"当前波动率{vol}%，全天候配置在不同周期下均有表现",
+        dca_multiplier=1.0, dca_reason="全天候配置，按计划定投")
 
 
 def _signal_dividend(sh: dict, cycle: str) -> StrategySignal:
@@ -381,24 +398,34 @@ def _signal_dividend(sh: dict, cycle: str) -> StrategySignal:
     mom = sh.get("momentum_1m", 0) or 0
     if cycle in ("滞胀期", "衰退期"):
         return StrategySignal(strategy_id="dividend-lowvol", strategy_name="红利低波",
-            signal="买入", confidence=0.80, reasoning=f"{cycle}红利策略防御性强 | 波动率{vol}%")
+            signal="买入", confidence=0.80, reasoning=f"{cycle}红利策略防御性强 | 波动率{vol}%",
+            dca_multiplier=1.5, dca_reason=f"{cycle}红利防御属性突出，可加码")
     elif vol > 20:
         return StrategySignal(strategy_id="dividend-lowvol", strategy_name="红利低波",
-            signal="买入", confidence=0.72, reasoning=f"高波动({vol}%)红利低波抗跌")
+            signal="买入", confidence=0.72, reasoning=f"高波动({vol}%)红利低波抗跌",
+            dca_multiplier=1.5, dca_reason="高波动市红利低波抗跌，可加码")
     return StrategySignal(strategy_id="dividend-lowvol", strategy_name="红利低波",
-        signal="持有", confidence=0.65, reasoning=f"红利策略适合底仓 | 波动率{vol}%")
+        signal="持有", confidence=0.65, reasoning=f"红利策略适合底仓 | 波动率{vol}%",
+        dca_multiplier=1.0, dca_reason="红利适合底仓，按计划定投")
 
 
 def _signal_dca(hs300: dict) -> StrategySignal:
     mom = hs300.get("momentum_1m")
     vol = hs300.get("volatility_60d", 15) or 15
     reason = "定投不看短期涨跌，坚持纪律长期积累份额"
+    dca_mult = 1.0
+    dca_reason = "按计划定投"
     if mom is not None and mom < -5:
         reason = f"沪深300近1月跌{mom:.1f}%，正是定投好时机——低位多攒份额"
+        dca_mult = 1.5
+        dca_reason = "近1月明显下跌，低位多攒份额"
     elif mom is not None and mom > 10:
         reason = f"沪深300近1月涨{mom:.1f}%，定投继续但可考虑减少单次金额"
+        dca_mult = 0.5
+        dca_reason = "近1月涨幅较大，本期减少单次金额"
     return StrategySignal(strategy_id="dca", strategy_name="定投策略",
-        signal="买入", confidence=0.90, reasoning=reason)
+        signal="买入", confidence=0.90, reasoning=reason,
+        dca_multiplier=dca_mult, dca_reason=dca_reason)
 
 
 # ── 策略列表 API ─────────────────────────────────────────
@@ -435,8 +462,9 @@ def get_strategy_by_id(sid: str, current_cycle: str, signals: dict = None) -> Qu
 
 # ── 入场信号综合决策（跨 7 个入场策略统合） ──────────────────
 
-# 入场信号方向权重（买入 +1 / 卖出 -1 / 持有 +0.35 / 观望 0）
-ENTRY_SIGNAL_SCORES = {"买入": 1.0, "持有": 0.35, "观望": 0.0, "卖出": -1.0}
+# 入场信号方向权重（买入 +1 / 卖出 -1 / 持有 0 / 观望 0）
+# 持有=0：避免"全持有"被误判为偏多（此前 +0.35 会把中性点抬高到 67.5）
+ENTRY_SIGNAL_SCORES = {"买入": 1.0, "持有": 0.0, "观望": 0.0, "卖出": -1.0}
 
 
 def synthesize_entry_decision(strategies: list[QuantStrategy]) -> dict:
@@ -512,4 +540,102 @@ def synthesize_entry_decision(strategies: list[QuantStrategy]) -> dict:
         "breakdown": breakdown,
         "key_reasons": key_reasons,
         "votes": votes,
+    }
+
+
+# ── 定投档位共识（定投为主的使用定位） ──────────────────
+
+# 各策略在"定投档位"里的参考权重：与定投择时直接相关的策略权重更高
+DCA_STRATEGY_WEIGHTS = {
+    "dca": 1.5,                 # 定投本体
+    "dividend-lowvol": 1.2,     # 红利底仓（防御性加码依据）
+    "merrill-rotation": 1.2,    # 周期择时
+    "dual-ma-trend": 1.0,       # 趋势择时
+    "rsrs-momentum": 1.0,       # 力度择时
+    "grid-trading": 1.0,        # 区间位置择时
+    "risk-parity": 0.5,         # 配置型，对档位贡献小
+}
+
+
+def synthesize_dca_decision(strategies: list[QuantStrategy], valuation: dict = None) -> dict:
+    """
+    综合各入场策略的定投档位 + 估值温度计，输出本期定投建议（0.5x / 1.0x / 1.5x）。
+
+    估值温度计作为"低买高卖"的锚：PE 分位越低，定投倍数越高（叠加在各策略档位上）。
+    返回 multiplier 已被钳制在 [0, 2.0]，tier 为中文档位。
+    """
+    if not strategies:
+        return {
+            "multiplier": 1.0, "tier": "正常", "label": "数据不足，按计划定投",
+            "valuation_multiplier": 1.0, "votes": [], "key_reasons": [],
+        }
+
+    weighted_sum = 0.0
+    weight_total = 0.0
+    votes = []
+
+    for s in strategies:
+        sig = s.current_signal
+        if sig is None:
+            continue
+        mult = getattr(sig, "dca_multiplier", 1.0) or 1.0
+        conf = sig.confidence or 0.5
+        w = DCA_STRATEGY_WEIGHTS.get(s.id, 1.0)
+        weighted_sum += mult * w * (0.6 + 0.4 * conf)
+        weight_total += w * (0.6 + 0.4 * conf)
+        votes.append({
+            "strategy_id": s.id,
+            "strategy_name": s.name,
+            "dca_multiplier": round(mult, 2),
+            "dca_reason": getattr(sig, "dca_reason", "") or "",
+            "confidence": round(conf, 2),
+        })
+
+    if weight_total <= 0:
+        strat_mult = 1.0
+    else:
+        strat_mult = weighted_sum / weight_total
+
+    # 估值温度计映射（低估值加码、高估值减码）
+    valuation_mult = 1.0
+    val_note = ""
+    if valuation:
+        pe_pct = valuation.get("pe_percentile")
+        if pe_pct is None:
+            pe_pct = valuation.get("pb_percentile")
+        if pe_pct is not None:
+            try:
+                from dca_engine import valuation_to_multiplier
+                valuation_mult, val_note = valuation_to_multiplier(float(pe_pct))
+            except Exception:
+                pass
+
+    # 策略档位与估值档位相乘（估值作为全局乘数），并钳制到 [0, 2.0]
+    multiplier = max(0.0, min(2.0, round(strat_mult * valuation_mult, 2)))
+
+    if multiplier >= 1.3:
+        tier, label = "加码", f"本期建议加码定投（{multiplier}x）"
+    elif multiplier <= 0.6:
+        tier, label = "减码", f"本期建议减码定投（{multiplier}x）"
+    elif multiplier <= 0.2:
+        tier, label = "暂停", f"极端高估/风险，建议暂停定投（{multiplier}x）"
+    else:
+        tier, label = "正常", f"本期按计划定投（{multiplier}x）"
+
+    # 关键理由：与 1.0 偏离最大的策略档位
+    votes_sorted = sorted(votes, key=lambda v: abs(v["dca_multiplier"] - 1.0), reverse=True)
+    key_reasons = []
+    for v in votes_sorted[:3]:
+        if v["dca_reason"]:
+            key_reasons.append(f"【{v['strategy_name']}】{v['dca_multiplier']}x — {v['dca_reason']}")
+    if val_note:
+        key_reasons.append(f"【估值温度计】{valuation_mult}x — {val_note}")
+
+    return {
+        "multiplier": multiplier,
+        "tier": tier,
+        "label": label,
+        "valuation_multiplier": round(valuation_mult, 2),
+        "votes": votes,
+        "key_reasons": key_reasons,
     }

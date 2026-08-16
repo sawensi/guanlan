@@ -243,7 +243,7 @@
         </span>
       </div>
       <div class="ranking-note">
-        筛选条件：PB &lt; 2 · 排除ST/*ST · 财务健康度调整 · 权重可调<br><small style="color:var(--text-3)">净利率=单季度净利润/营收（非TTM口径），与同花顺等平台可能不同</small>
+        筛选条件：PB &lt; 2 · 排除ST/*ST · 财务健康度调整 · 权重可调<br><small style="color:var(--text-3)">PE 为滚动12个月(TTM)口径 · 亏损股 PE 记最低分 · 财务数据截至最近报告期</small>
       </div>
       <!-- 权重滑块 -->
       <div class="weight-sliders" id="weightSliders">
@@ -361,6 +361,55 @@
 
       <!-- 结果容器 -->
       <div id="btResults" style="display:none;"></div>
+    </div>
+
+    <!-- 定投回测 (DCA) -->
+    <div class="card" style="margin-top:16px;">
+      <div class="card-label">📅 定投回测（DCA）</div>
+      <div class="card-sub">按月/周定额买入，对比「固定定投 · 估值加码定投 · 一次性买入」。定投收益以 <b>XIRR 资金加权年化</b> 为准（普通收益率对多期现金流是失真的）。</div>
+
+      <div class="bt-form">
+        <div class="bt-form-row">
+          <div class="bt-form-group">
+            <label>基金/黄金</label>
+            <input type="text" id="dcaFundCode" value="510300" list="btEtfList" style="width:110px;">
+          </div>
+          <div class="bt-form-group">
+            <label>定投周期</label>
+            <select id="dcaPeriod">
+              <option value="monthly">每月</option>
+              <option value="weekly">每周</option>
+            </select>
+          </div>
+          <div class="bt-form-group">
+            <label>每期金额</label>
+            <input type="number" id="dcaAmount" value="2000" step="100" min="100" style="width:100px;">
+          </div>
+          <div class="bt-form-group">
+            <label>申购费率%</label>
+            <input type="number" id="dcaFee" placeholder="自动" step="0.01" min="0" style="width:90px;">
+          </div>
+          <div class="bt-form-group">
+            <label><input type="checkbox" id="dcaReinvest" checked style="vertical-align:middle;"> 红利再投</label>
+          </div>
+        </div>
+        <div class="bt-form-row">
+          <div class="bt-form-group">
+            <label>起始日期</label>
+            <input type="date" id="dcaStartDate" value="2021-01-01">
+          </div>
+          <div class="bt-form-group">
+            <label>结束日期</label>
+            <input type="date" id="dcaEndDate" value="2025-12-31">
+          </div>
+          <div class="bt-form-actions">
+            <button id="dcaRunBtn" class="btn-primary" onclick="runDcaBacktest()">▶ 运行定投回测</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="dcaError" style="display:none;" class="bt-error"></div>
+      <div id="dcaResults" style="display:none;"></div>
     </div>
 
     <!-- 免责声明 -->

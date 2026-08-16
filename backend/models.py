@@ -137,6 +137,9 @@ class StrategySignal(BaseModel):
     confidence: float         # 信号置信度
     reasoning: str            # 信号逻辑
     suggested_allocation: dict = {}  # 建议配置
+    # ── 定投档位（定投为主的使用定位下，信号只作为"本期投多少钱"的参考）──
+    dca_multiplier: float = 1.0     # 定投倍数: 0=暂停 | 0.5=减码 | 1.0=正常 | 1.5=加码
+    dca_reason: str = ""            # 为什么这样投（一句话）
 
 
 class QuantStrategy(BaseModel):
@@ -345,6 +348,10 @@ class BacktestMetrics(BaseModel):
     total_trades: int                   # 总交易次数
     benchmark_return_pct: float         # 基准收益率 (buy-and-hold)
     alpha_pct: float                    # 超额收益
+    calmar_ratio: float = 0.0           # Calmar = 年化收益 / 最大回撤绝对值
+    sortino_ratio: float = 0.0          # Sortino（下行风险调整）
+    annualized_volatility_pct: float = 0.0  # 年化波动率 %
+    max_consecutive_losses: int = 0     # 最长连续亏损交易次数
 
 
 class BacktestResult(BaseModel):

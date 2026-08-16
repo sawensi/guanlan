@@ -11,9 +11,10 @@
 - **宏观仪表盘** — 美林时钟周期判断 + 9 项宏观指标（GDP/CPI/PMI/M2/PPI 等）+ ECharts 可视化 + 资产配置建议 + 数据来源可信度横幅
 - **推荐标的** — ETF 推荐 + Top 5 股票 + 策略信号 + 金牛奖基金
 - **每日解读** — 徐小明博客全文聚合 + DeepSeek LLM 财经解读
-- **量化策略** — 5 种入场策略 + 10 种离场策略，策略一致性面板
-- **选股排名** — A 股低 PB Top 50，五维度财务健康度，板块封顶，SOE 过滤
-- **回测** — 逐日 walk-forward 回测引擎，多离场策略批量对比叠加权益曲线
+- **量化策略** — 7 种入场策略 + 10 种离场策略，策略一致性面板 + 定投档位共识（本期投 0.5x/1x/1.5x）
+- **选股排名** — A 股低 PB Top 50，PE-TTM 口径，五维度财务健康度，板块封顶，SOE 过滤
+- **回测** — 逐日 walk-forward 回测引擎，多离场策略批量对比叠加权益曲线（Calmar/Sortino 等指标）
+- **定投回测** — DCA 引擎：固定/估值加码/一次性三模式对比，XIRR 资金加权年化，T+1 净值与申赎费计入
 
 ## 技术栈
 
@@ -40,7 +41,8 @@ guanlan/
 │   ├── fund_data.py         # 基金数据
 │   ├── fund_flow.py         # 资金流向
 │   ├── indicators.py        # 技术指标
-│   ├── backtest_engine.py   # 回测引擎
+│   ├── backtest_engine.py   # 回测引擎（walk-forward，一次性买卖）
+│   ├── dca_engine.py        # 定投引擎（XIRR + 估值加码 + 止盈再平衡）
 │   ├── jinniu_award.py      # 金牛奖数据
 │   └── requirements.txt     # 依赖清单
 ├── web/

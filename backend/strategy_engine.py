@@ -15,7 +15,10 @@ import json
 import os
 from datetime import datetime
 
-from indicators import compute_ma, compute_rsrs
+from indicators import (
+    compute_ma, compute_ma_status, compute_rsrs, compute_atr, compute_rsi,
+    compute_macd, compute_volatility, compute_momentum,
+)
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
 CACHE_FILE = os.path.join(DATA_DIR, "strategy_signals_cache.json")
@@ -84,112 +87,29 @@ def compute_all_signals() -> dict:
         highs = df["high"].tolist()
         lows = df["low"].tolist()
 
-        # MA 交叉
+        # 全部指标复用 indicators.py 单源实现（避免与回测引擎口径漂移）
         ma20 = compute_ma(closes, 20)
         ma60 = compute_ma(closes, 60)
-        cur_ma20 = ma20[-1] if ma20[-1] is not None else None
-        cur_ma60 = ma60[-1] if ma60[-1] is not None else None
-        prev_ma20 = ma20[-2] if len(ma20) > 1 and ma20[-2] is not None else None
-        prev_ma60 = ma60[-2] if len(ma60) > 1 and ma60[-2] is not None else None
+        ma_status = compute_ma_status(ma20, ma60)
+        vol = compute_volatility(closes, 60)
 
-        ma_status = "未知"
-        if cur_ma20 and cur_ma60:
-            if cur_ma20 > cur_ma60:
-                if prev_ma20 and prev_ma60 and prev_ma20 <= prev_ma60:
-                    ma_status = "金叉(刚突破)"
-                else:
-                    ma_status = "多头排列"
-            else:
-                if prev_ma20 and prev_ma60 and prev_ma20 >= prev_ma60:
-                    ma_status = "死叉(刚破位)"
-                else:
-                    ma_status = "空头排列"
-
-        # 60 日波动率 (年化)
-        returns = []
-        for i in range(1, min(61, len(closes))):
-            if closes[-i] and closes[-i-1] and closes[-i-1] != 0:
-                returns.append((closes[-i] - closes[-i-1]) / closes[-i-1])
-        vol = None
-        if returns:
-            daily_std = (sum((r - sum(returns)/len(returns))**2 for r in returns) / len(returns)) ** 0.5
-            vol = round(daily_std * (250 ** 0.5) * 100, 2)  # 年化波动率 %
-
-        # 60 日价格区间 (网格)
         recent_closes = closes[-60:]
         grid_high = round(max(recent_closes), 2)
         grid_low = round(min(recent_closes), 2)
         grid_mid = round((grid_high + grid_low) / 2, 2)
 
-        # 近期动量
-        if len(closes) >= 42:
-            mom_1m = round((closes[-1] - closes[-21]) / closes[-21] * 100, 2) if closes[-21] else None
-        else:
-            mom_1m = None
-        if len(closes) >= 84:
-            mom_3m = round((closes[-1] - closes[-63]) / closes[-63] * 100, 2) if closes[-63] else None
-        else:
-            mom_3m = None
-
-        # RSRS
+        mom_1m = compute_momentum(closes, 21)
+        mom_3m = compute_momentum(closes, 63)
         rsrs = compute_rsrs(highs, lows, window=18)
-
-        # ATR(14) — Average True Range
-        atr14 = None
-        if len(highs) >= 15:
-            tr_vals = []
-            for i in range(1, len(highs)):
-                tr = max(
-                    highs[i] - lows[i],
-                    abs(highs[i] - closes[i - 1]),
-                    abs(lows[i] - closes[i - 1]),
-                )
-                tr_vals.append(tr)
-            if len(tr_vals) >= 14:
-                atr14 = round(sum(tr_vals[:14]) / 14, 4)
-                for i in range(14, len(tr_vals)):
-                    atr14 = round((atr14 * 13 + tr_vals[i]) / 14, 4)
-
-        # RSI(14) — Relative Strength Index
-        rsi14 = None
-        if len(closes) >= 15:
-            gains, losses = [], []
-            for i in range(1, len(closes)):
-                diff = closes[i] - closes[i - 1]
-                gains.append(diff if diff > 0 else 0)
-                losses.append(-diff if diff < 0 else 0)
-            avg_gain = sum(gains[-14:]) / 14
-            avg_loss = sum(losses[-14:]) / 14
-            for i in range(14, len(gains)):
-                avg_gain = (avg_gain * 13 + gains[i]) / 14
-                avg_loss = (avg_loss * 13 + losses[i]) / 14
-            if avg_loss == 0:
-                rsi14 = 100.0
-            else:
-                rsi14 = round(100 - 100 / (1 + avg_gain / avg_loss), 2)
-
-        # MACD(12,26,9)
-        macd_val, macd_signal, macd_hist = None, None, None
-        if len(closes) >= 35:
-            def _ema(data, period):
-                k = 2 / (period + 1)
-                out = [data[0]]
-                for i in range(1, len(data)):
-                    out.append(data[i] * k + out[-1] * (1 - k))
-                return out
-            ema12 = _ema(closes, 12)
-            ema26 = _ema(closes, 26)
-            macd_line = [ema12[i] - ema26[i] for i in range(len(closes))]
-            sig_line = _ema(macd_line, 9)
-            macd_val = round(macd_line[-1], 4)
-            macd_signal = round(sig_line[-1], 4)
-            macd_hist = round(macd_line[-1] - sig_line[-1], 4)
+        atr14 = compute_atr(highs, lows, closes, 14)
+        rsi14 = compute_rsi(closes, 14)
+        macd = compute_macd(closes)
 
         result[label] = {
             "name": INDEX_CONFIG.get(label, {}).get("name", label),
             "latest_close": round(closes[-1], 2),
-            "ma20": round(cur_ma20, 2) if cur_ma20 else None,
-            "ma60": round(cur_ma60, 2) if cur_ma60 else None,
+            "ma20": round(ma20[-1], 2) if ma20[-1] is not None else None,
+            "ma60": round(ma60[-1], 2) if ma60[-1] is not None else None,
             "ma_status": ma_status,
             "volatility_60d": vol,
             "grid_high": grid_high,
@@ -203,9 +123,9 @@ def compute_all_signals() -> dict:
             "rsrs_zscore": rsrs["zscore"],
             "atr_14": atr14,
             "rsi_14": rsi14,
-            "macd": macd_val,
-            "macd_signal": macd_signal,
-            "macd_hist": macd_hist,
+            "macd": macd["macd"],
+            "macd_signal": macd["signal"],
+            "macd_hist": macd["hist"],
         }
 
     _calc_broad(sh_df, "sh000001")

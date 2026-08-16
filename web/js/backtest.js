@@ -650,3 +650,178 @@ function toggleBtInfo() {
   if (box) box.addEventListener('change', loadStrategyInfo);
   loadStrategyInfo();
 })();
+
+// ── 定投回测 (DCA) ──────────────────────────────────
+
+var DCA_MODE_LABEL = {
+  'fixed': '固定定投',
+  'valuation': '估值加码定投',
+  'lump': '一次性买入',
+};
+var DCA_MODE_COLOR = {
+  'fixed': '#2c5f2d',
+  'valuation': '#1971c2',
+  'lump': '#a0aec0',
+};
+var DCA = { loading: false, chart: null };
+
+function showDcaError(msg) {
+  var el = $('dcaError');
+  el.textContent = '⚠️ ' + msg;
+  el.style.display = 'block';
+}
+
+function dcaModeLabel(mode) { return DCA_MODE_LABEL[mode] || mode; }
+
+async function runDcaBacktest() {
+  if (DCA.loading) return;
+  var today = new Date().toISOString().slice(0, 10);
+  var params = new URLSearchParams({
+    fund_code: $('dcaFundCode').value.trim() || '510300',
+    start_date: $('dcaStartDate').value || '2021-01-01',
+    end_date: $('dcaEndDate').value || today,
+    amount_per_period: $('dcaAmount').value || '2000',
+    period: $('dcaPeriod').value || 'monthly',
+    dividend_reinvest: $('dcaReinvest').checked,
+  });
+  var fee = $('dcaFee').value.trim();
+  if (fee) params.set('subscription_fee_pct', fee);
+
+  DCA.loading = true;
+  var btn = $('dcaRunBtn');
+  btn.textContent = '⏳ 运行中...';
+  btn.disabled = true;
+  $('dcaResults').style.display = 'none';
+  $('dcaError').style.display = 'none';
+
+  try {
+    var resp = await fetch(API + '/dca/backtest?' + params.toString());
+    var data = await resp.json();
+    if (!resp.ok) {
+      showDcaError(data.detail || '定投回测失败 (HTTP ' + resp.status + ')');
+      DCA.loading = false;
+      btn.textContent = '▶ 运行定投回测';
+      btn.disabled = false;
+      return;
+    }
+    renderDcaBacktest(data);
+  } catch (e) {
+    showDcaError('定投回测请求失败: ' + (e.message || '网络错误'));
+  }
+  DCA.loading = false;
+  btn.textContent = '▶ 运行定投回测';
+  btn.disabled = false;
+}
+
+function dcaPct(v, suffix) {
+  if (v === null || v === undefined || isNaN(v)) return '--';
+  var s = v.toFixed(2);
+  return suffix ? s + suffix : s;
+}
+
+function renderDcaBacktest(data) {
+  if (!data || !data.results || !data.results.length) {
+    showDcaError('定投回测返回数据异常');
+    return;
+  }
+  if (DCA.chart) { DCA.chart.dispose(); DCA.chart = null; }
+
+  $('dcaResults').style.display = 'block';
+  $('dcaError').style.display = 'none';
+
+  var results = data.results;
+  var summary =
+    '<div class="bt-summary">' +
+      '<span><strong>' + escHtml(data.fund_name) + '</strong> (' + escHtml(data.fund_code) + ')</span>' +
+      '<span>' + (data.period === 'weekly' ? '每周' : '每月') + ' ¥' + Number(data.amount_per_period).toLocaleString() + '</span>' +
+      '<span>' + escHtml(data.start_date) + ' ~ ' + escHtml(data.end_date) + '</span>' +
+      '<span>共 ' + data.n_periods + ' 期</span>' +
+    '</div>';
+
+  // 对比表
+  var head = '<tr><th class="bt-cmp-metric">模式</th>' +
+    '<th>总投入</th><th>期末价值</th><th>XIRR年化</th><th>累计收益</th><th>最大回撤</th></tr>';
+  var body = '';
+  for (var i = 0; i < results.length; i++) {
+    var r = results[i];
+    var xirr = (r.xirr_pct === null || r.xirr_pct === undefined) ? '--' : (r.xirr_pct > 0 ? '+' : '') + r.xirr_pct.toFixed(2) + '%';
+    var ret = (r.total_return_pct > 0 ? '+' : '') + r.total_return_pct.toFixed(2) + '%';
+    body += '<tr>' +
+      '<td class="bt-cmp-metric"><span class="bt-exit-dot" style="background:' + (DCA_MODE_COLOR[r.mode] || '#999') + ';"></span>' + dcaModeLabel(r.mode) + '</td>' +
+      '<td>¥' + Math.round(r.total_invested || 0).toLocaleString('zh-CN') + '</td>' +
+      '<td>¥' + Math.round(r.final_value || 0).toLocaleString('zh-CN') + '</td>' +
+      '<td><strong>' + xirr + '</strong></td>' +
+      '<td>' + ret + '</td>' +
+      '<td>' + dcaPct(r.max_drawdown_pct, '%') + '</td>' +
+      '</tr>';
+  }
+  var tableHtml =
+    '<div class="bt-compare-wrap"><div class="card-label">📊 三模式对比（XIRR 为多期现金流的正确年化口径）</div>' +
+    '<div class="bt-compare-scroll"><table class="bt-compare-table">' +
+    '<thead>' + head + '</thead><tbody>' + body + '</tbody></table></div></div>';
+
+  var chartHtml =
+    '<div class="bt-chart-container">' +
+      '<div class="card-label">📈 账户权益曲线（含留存现金）</div>' +
+      '<div id="dcaChart" class="bt-chart"></div>' +
+    '</div>';
+
+  $('dcaResults').innerHTML = summary + renderDataNote(data.data_note) + tableHtml + chartHtml;
+
+  setTimeout(function() { renderDcaChart(results); }, 150);
+}
+
+function renderDcaChart(results) {
+  var dom = document.getElementById('dcaChart');
+  if (!dom) return;
+  if (typeof echarts === 'undefined') {
+    dom.innerHTML = '<div style="padding:40px;text-align:center;color:#999;">ECharts 加载中...</div>';
+    return;
+  }
+  if (DCA.chart) DCA.chart.dispose();
+  DCA.chart = echarts.init(dom);
+
+  // 用一次性买入（跨全区间）的日期作为共享 x 轴
+  var lump = results.filter(function(r){ return r.mode === 'lump'; })[0] || results[0];
+  var dates = (lump.equity_curve || []).map(function(p){ return p.date; });
+  var labelInterval = Math.max(1, Math.floor(dates.length / 12));
+
+  var series = results.map(function(r) {
+    var m = {};
+    (r.equity_curve || []).forEach(function(p){ m[p.date] = p.equity; });
+    return {
+      name: dcaModeLabel(r.mode),
+      type: 'line', smooth: true, symbol: 'none',
+      data: dates.map(function(d){ return (m[d] !== undefined) ? m[d] : null; }),
+      lineStyle: { color: DCA_MODE_COLOR[r.mode] || '#999', width: 2 },
+      connectNulls: false,
+    };
+  });
+
+  DCA.chart.setOption({
+    tooltip: {
+      trigger: 'axis',
+      formatter: function(params) {
+        var s = params[0].axisValue + '<br/>';
+        for (var i = 0; i < params.length; i++) {
+          s += params[i].marker + ' ' + params[i].seriesName + ': ¥' +
+               Number(params[i].value).toLocaleString() + '<br/>';
+        }
+        return s;
+      },
+    },
+    legend: { bottom: 0 },
+    grid: { left: 70, right: 20, top: 20, bottom: 40 },
+    xAxis: {
+      type: 'category', data: dates,
+      axisLabel: { interval: labelInterval, formatter: function(v){ return v ? v.slice(0,7) : ''; }, fontSize: 10 },
+    },
+    yAxis: {
+      type: 'value',
+      axisLabel: { formatter: function(v){ return v >= 10000 ? (v/10000).toFixed(1)+'万' : v; } },
+    },
+    series: series,
+  });
+
+  window.addEventListener('resize', function() { if (DCA.chart) DCA.chart.resize(); });
+}

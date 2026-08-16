@@ -94,6 +94,22 @@ function renderDecisionOverview(data) {
 
   const posLine = (v.equity_weight > 0 ? ' · 建议股票仓位 ' + Math.round(v.equity_weight) + '%' : '');
 
+  // 定投档位建议（定投为主：其他策略作为"本期投多少钱"的参考）
+  const dc = data.dca_consensus || {};
+  const dcaTierMap = { '加码':'#2c5f2d', '正常':'#2f6fed', '减码':'#e0882e', '暂停':'#d94444' };
+  const dcaTierBg = { '加码':'#e8f5e9', '正常':'#e8f1fd', '减码':'#fef3e0', '暂停':'#fce4e4' };
+  const dcaHtml = (dc.multiplier != null) ?
+    '<div style="display:flex;align-items:center;gap:10px;background:' + (dcaTierBg[dc.tier] || '#f5f6f8') + ';border-radius:8px;padding:10px 14px;margin-top:10px;">' +
+      '<span style="font-size:1.3rem;">💰</span>' +
+      '<div style="flex:1;">' +
+        '<div style="font-weight:700;color:' + (dcaTierMap[dc.tier] || '#333') + ';">定投档位建议 · ' + escHtml(dc.tier || '') + '（' + (dc.multiplier != null ? dc.multiplier + 'x' : '--') + '）</div>' +
+        '<div style="font-size:.78rem;color:#666;">' + escHtml(dc.label || '') + '</div>' +
+      '</div>' +
+    '</div>' : '';
+  const dcaReasons = (dc.key_reasons || []).map(function(r) {
+    return '<li style="margin:3px 0;">' + escHtml(r) + '</li>';
+  }).join('');
+
   el.innerHTML =
     '<div style="background:#fff;border:1px solid #eee;border-radius:12px;padding:14px 16px;margin-bottom:14px;">' +
       '<div style="display:flex;align-items:center;gap:10px;background:' + sigBg + ';border-radius:8px;padding:10px 14px;">' +
@@ -104,8 +120,10 @@ function renderDecisionOverview(data) {
             ' · 周期 ' + escHtml(data.cycle || '—') + posLine + '</div>' +
         '</div>' +
       '</div>' +
+      dcaHtml +
       '<div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:10px;">' + votesHtml + '</div>' +
       (reasonsHtml ? '<ul style="margin:10px 0 0 18px;font-size:.78rem;color:#555;">' + reasonsHtml + '</ul>' : '') +
+      (dcaReasons ? '<ul style="margin:6px 0 0 18px;font-size:.78rem;color:#555;">' + dcaReasons + '</ul>' : '') +
     '</div>';
 }
 

@@ -220,6 +220,55 @@ def _fetch_usdcny(days: int = 120) -> dict | None:
         return None
 
 
+def _fetch_bond_10y(days: int = 400) -> dict | None:
+    """获取中国 10 年期国债收益率（中债收益率曲线），返回 {dates, yields}"""
+    import akshare as ak
+    try:
+        start = (datetime.now() - timedelta(days=days)).strftime("%Y%m%d")
+        end = datetime.now().strftime("%Y%m%d")
+        df = ak.bond_china_yield(start_date=start, end_date=end)
+        if df is None or len(df) == 0:
+            return None
+        col = None
+        for c in df.columns:
+            if "10年" in str(c):
+                col = c
+                break
+        if col is None:
+            return None
+        dcol = None
+        for c in df.columns:
+            if "日期" in str(c) or "date" in str(c).lower():
+                dcol = c
+                break
+        dates = df[dcol].astype(str).tolist() if dcol else [str(i) for i in range(len(df))]
+        yields = [float(v) for v in df[col].tolist()]
+        return {"dates": dates, "yields": yields}
+    except Exception as e:
+        print(f"[fund_data] 10Y bond yield fetch failed: {e}")
+        return None
+
+
+def _attach_gold_macro(data: dict) -> dict:
+    """
+    黄金 ETF：附加 10Y 国债收益率与 USD/CNY 月涨跌，供黄金离场策略③④使用。
+    失败时静默降级（对应条件回退到周期推断/不触发）。
+    """
+    try:
+        bond = _fetch_bond_10y()
+        if bond and len(bond.get("yields", [])) >= 2:
+            data["bond_10y"] = bond["yields"][-1]
+            data["bond_10y_prev"] = bond["yields"][-2]
+        usd = _fetch_usdcny(days=60)
+        if usd and len(usd.get("closes", [])) >= 22:
+            c = usd["closes"]
+            if c[-22] and c[-22] > 0:
+                data["usdcny_change_1m"] = round((c[-1] - c[-22]) / c[-22] * 100, 2)
+    except Exception as e:
+        print(f"[fund_data] gold macro attach failed: {e}")
+    return data
+
+
 def _fetch_open_fund_nav(code: str, days: int = 120) -> dict | None:
     """
     通过 AKShare 获取开放式基金历史净值 (天天基金/支付宝 任意代码)。
@@ -387,6 +436,10 @@ def fetch_fund_history(code: str, days: int = 120) -> dict | None:
         "momentum_3m": mom3m,
         "consecutive_direction": consecutive_direction,
     }
+
+    # 黄金标的附加实际利率/汇率数据（供黄金离场策略③④使用）
+    if fund_type == "gold":
+        result = _attach_gold_macro(result)
 
     _save_cache(code, result)
     return result

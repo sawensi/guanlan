@@ -1,5 +1,11 @@
 # 观澜 — 项目开发记录
 
+## 发布说明（2026-08-16）
+
+- 代码首次发布到 GitHub（`sawensi/guanlan`），用于代码托管与版本管理；线上服务仍部署在个人 ECS。
+- 发布前脱敏：文档中的服务器公网 IP 已替换为 `<your-server-ip>` 占位符。
+- 敏感配置（`DEEPSEEK_API_KEY`、`WEWE_RSS_URL`、`WEWE_FEED_ID`）一律从环境变量读取，无硬编码；`.gitignore` 排除 `backend/data/`（定时刷新缓存）、`.venv/`、`__pycache__/`。
+
 ## 项目概述
 
 **观澜**是一个个人投资辅助 Web 工具，部署在阿里云 ECS（`<your-server-ip>`），与通玄（经典文言翻译）共存于同一台服务器。

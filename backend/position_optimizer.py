@@ -54,7 +54,9 @@ def compute_add_signal(fund_data: dict, market_ctx: dict) -> dict:
     - 均线：多头/金叉上浮、空头/死叉下调
     """
     dca = market_ctx.get("dca_consensus") or {}
-    base_mult = dca.get("multiplier", 1.0) or 1.0
+    base_mult = dca.get("multiplier")
+    if base_mult is None:
+        base_mult = 1.0
 
     latest_nav = fund_data.get("latest_nav")
     grid_high = fund_data.get("grid_high")

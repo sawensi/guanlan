@@ -621,6 +621,70 @@ async def get_exit_strategy_detail(
     }
 
 
+# ── 核心 API: 当日持仓优化建议 ─────────────────────────
+
+@app.post("/guanlan/api/position-optimization")
+async def position_optimization(data: dict = None):
+    """当日持仓优化建议：输入持仓列表（代码+收益率+建仓时间），输出每只基金的加仓/持有/减仓/清仓建议"""
+    from position_optimizer import compute_market_context, synthesize_position_advice
+
+    holdings = (data or {}).get("holdings") or []
+    if not holdings:
+        raise HTTPException(status_code=400, detail="请至少输入一只持仓（holdings 为空）")
+
+    # 大盘环境算一次，多基金复用（失败回退，不阻塞整体）
+    try:
+        market_ctx = compute_market_context(_latest_dashboard, _latest_insights)
+    except Exception as e:
+        print(f"[观澜] position-optimization market context failed (non-fatal): {e}")
+        market_ctx = {
+            "cycle": "复苏期", "cycle_confidence": 0, "valuation": None,
+            "entry_consensus": None, "dca_consensus": None, "xuxiaoming_stance": None,
+        }
+
+    def _empty(code, return_rate, entry_date, error):
+        return {
+            "fund_code": code, "fund_name": "", "fund_type": "unknown",
+            "latest_nav": None, "latest_nav_date": None,
+            "return_rate": return_rate, "entry_date": entry_date, "days_held": None,
+            "action": "数据不足", "action_detail": "", "confidence": None,
+            "key_reasons": [], "add_signal": None, "exit_summary": None, "error": error,
+        }
+
+    async def _advice(h):
+        code = str((h or {}).get("fund_code", "")).strip() if isinstance(h, dict) else ""
+        return_rate = (h or {}).get("return_rate") if isinstance(h, dict) else None
+        entry_date = (h or {}).get("entry_date") if isinstance(h, dict) else None
+        if not code:
+            return _empty("", return_rate, entry_date, "缺少基金代码")
+        try:
+            return await asyncio.to_thread(
+                synthesize_position_advice, code, return_rate, entry_date, market_ctx
+            )
+        except Exception as e:
+            return _empty(code, return_rate, entry_date, f"分析失败: {e}")
+
+    results = await asyncio.gather(*(_advice(h) for h in holdings))
+
+    data_note = (
+        "场外基金净值为最近已确认净值，T 日 14:50 尚未更新；"
+        "红利/债券价格指数未含分红，实际收益可能被低估。"
+    )
+
+    return {
+        "market_context": {
+            "cycle": market_ctx.get("cycle"),
+            "cycle_confidence": market_ctx.get("cycle_confidence"),
+            "valuation": market_ctx.get("valuation"),
+            "entry_consensus": market_ctx.get("entry_consensus"),
+            "dca_consensus": market_ctx.get("dca_consensus"),
+        },
+        "holdings": results,
+        "data_note": data_note,
+        "generated_at": datetime.now().isoformat(),
+    }
+
+
 # ── 核心 API: 股票排名 ────────────────────────────────
 
 @app.get("/guanlan/api/rankings")

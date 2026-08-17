@@ -1842,3 +1842,59 @@ body {
 .bt-compare-trade-details[open] summary { border-bottom: 1px solid var(--border-light, #e2e8f0); }
 .bt-compare-trade-details .bt-trade-wrap { border: none; border-radius: 0; }
 .bt-compare-trade-details .bt-trade-wrap { margin-top: 0; max-height: 320px; }
+
+/* ═══ 当日持仓优化建议 ═══ */
+.holdings-editor { margin-bottom: 12px; }
+.holdings-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 0;
+}
+.holdings-row-head {
+  font-size: .68rem; color: var(--text-3); font-weight: 600;
+  padding-bottom: 4px; border-bottom: 1px solid var(--border);
+  margin-bottom: 4px;
+}
+.holdings-col-code { flex: 1.5; }
+.holdings-col-return { flex: 1; }
+.holdings-col-date { flex: 1.5; }
+.holdings-col-del { flex: 0 0 28px; text-align: center; }
+.holdings-input {
+  padding: 6px 8px; font-size: .82rem;
+  border: 1.5px solid var(--border); border-radius: 8px;
+  background: var(--card); color: var(--text); outline: none;
+  -webkit-appearance: none; min-width: 0; width: 100%;
+}
+.holdings-input:focus { border-color: var(--green); box-shadow: 0 0 0 2px var(--green-l); }
+.holdings-del {
+  width: 28px; height: 28px; border: none; border-radius: 50%;
+  background: #fde8e8; color: var(--red); font-size: 1rem; line-height: 1;
+  cursor: pointer; flex-shrink: 0;
+}
+.holdings-actions { margin-top: 8px; }
+.holdings-query { display: flex; align-items: center; gap: 12px; margin: 4px 0 12px; flex-wrap: wrap; }
+.holdings-hint { font-size: .72rem; color: var(--text-3); }
+.holdings-note {
+  margin-top: 10px; padding: 8px 12px; font-size: .72rem; color: var(--text-2);
+  background: #fffbe8; border: 1px solid #f0e4b0; border-radius: 8px; line-height: 1.6;
+}
+.holdings-mc {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); padding: 12px 14px; margin-bottom: 12px;
+}
+.holdings-mc-title { font-weight: 700; color: var(--text); margin-bottom: 8px; font-size: .85rem; }
+.holdings-mc-row { display: flex; flex-wrap: wrap; gap: 8px 18px; font-size: .78rem; color: var(--text-2); }
+.holdings-mc-row b { color: var(--text); }
+.holdings-card {
+  background: var(--card); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); padding: 14px 16px; margin-bottom: 12px;
+}
+.holdings-card-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+.holdings-card-title { display: flex; align-items: center; gap: 8px; font-size: .9rem; font-weight: 600; flex-wrap: wrap; }
+.holdings-card-code { font-size: .72rem; color: var(--text-3); font-weight: 500; }
+.holdings-card-type { font-size: .72rem; color: var(--text-2); font-weight: 500; }
+.holdings-card-meta { display: flex; flex-wrap: wrap; gap: 8px 16px; font-size: .74rem; color: var(--text-2); margin-bottom: 10px; }
+.holdings-verdict {
+  padding: 10px 14px; border-radius: 8px; font-size: .88rem; font-weight: 600; line-height: 1.5;
+}
+.holdings-reasons { margin: 10px 0 0 18px; font-size: .76rem; color: #555; padding: 0; }
+.holdings-reasons li { margin: 3px 0; }

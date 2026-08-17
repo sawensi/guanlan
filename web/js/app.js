@@ -4,7 +4,7 @@
  */
 
 const API  = '/guanlan/api';
-const APP  = { page: 'dashboard', dash: null, ins: null, strats: [] };
+const APP  = { page: 'dashboard', dash: null, ins: null, strats: [], holdings: false };
 const $    = id => document.getElementById(id);
 
 // HTML 转义（防 XSS）
@@ -31,9 +31,14 @@ async function get(path) {
   }
 }
 
-async function post(path) {
+async function post(path, body) {
   try {
-    const r = await fetch(API + path, { method: 'POST' });
+    const opts = { method: 'POST' };
+    if (body !== undefined && body !== null) {
+      opts.headers = { 'Content-Type': 'application/json' };
+      opts.body = JSON.stringify(body);
+    }
+    const r = await fetch(API + path, opts);
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     return await r.json();
   } catch (e) {
@@ -59,6 +64,7 @@ function go(page) {
   if (page === 'insights'   && !APP.ins)  loadIns();
   if (page === 'strategies' && !APP.strats.length) loadStrats();
   if (page === 'rankings'  && !APP.rankings) loadRankings();
+  if (page === 'holdings'  && !APP.holdings) loadHoldings();
 }
 
 // ── Simple Markdown ─────────────────────────────

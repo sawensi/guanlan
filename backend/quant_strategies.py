@@ -615,10 +615,10 @@ def synthesize_dca_decision(strategies: list[QuantStrategy], valuation: dict = N
 
     if multiplier >= 1.3:
         tier, label = "加码", f"本期建议加码定投（{multiplier}x）"
-    elif multiplier <= 0.6:
-        tier, label = "减码", f"本期建议减码定投（{multiplier}x）"
     elif multiplier <= 0.2:
         tier, label = "暂停", f"极端高估/风险，建议暂停定投（{multiplier}x）"
+    elif multiplier <= 0.6:
+        tier, label = "减码", f"本期建议减码定投（{multiplier}x）"
     else:
         tier, label = "正常", f"本期按计划定投（{multiplier}x）"
 

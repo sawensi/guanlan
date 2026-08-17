@@ -626,7 +626,9 @@ async def get_exit_strategy_detail(
 @app.post("/guanlan/api/position-optimization")
 async def position_optimization(data: dict = None):
     """当日持仓优化建议：输入持仓列表（代码+收益率+建仓时间），输出每只基金的加仓/持有/减仓/清仓建议"""
-    from position_optimizer import compute_market_context, synthesize_position_advice
+    from position_optimizer import (
+        compute_market_context, synthesize_position_advice, compute_add_candidates,
+    )
 
     holdings = (data or {}).get("holdings") or []
     if not holdings:
@@ -648,7 +650,8 @@ async def position_optimization(data: dict = None):
             "latest_nav": None, "latest_nav_date": None,
             "return_rate": return_rate, "entry_date": entry_date, "days_held": None,
             "action": "数据不足", "action_detail": "", "confidence": None,
-            "key_reasons": [], "add_signal": None, "exit_summary": None, "error": error,
+            "key_reasons": [], "add_signal": None, "exit_summary": None,
+            "best_exit": None, "error": error,
         }
 
     async def _advice(h):
@@ -666,6 +669,14 @@ async def position_optimization(data: dict = None):
 
     results = await asyncio.gather(*(_advice(h) for h in holdings))
 
+    # 汇总：加仓其他基金候选（排除当前持仓，失败非致命）
+    held_codes = [str((h or {}).get("fund_code", "")).strip() for h in holdings if isinstance(h, dict)]
+    try:
+        add_candidates = await asyncio.to_thread(compute_add_candidates, held_codes, market_ctx)
+    except Exception as e:
+        print(f"[观澜] position-optimization add candidates failed (non-fatal): {e}")
+        add_candidates = []
+
     data_note = (
         "场外基金净值为最近已确认净值，T 日 14:50 尚未更新；"
         "红利/债券价格指数未含分红，实际收益可能被低估。"
@@ -680,6 +691,7 @@ async def position_optimization(data: dict = None):
             "dca_consensus": market_ctx.get("dca_consensus"),
         },
         "holdings": results,
+        "summary": {"add_candidates": add_candidates},
         "data_note": data_note,
         "generated_at": datetime.now().isoformat(),
     }

@@ -88,14 +88,16 @@ ETF_INDEX_MAP = {
 }
 
 
-def _cache_path(code: str) -> str:
+def _cache_path(code: str, days: int = 120) -> str:
     os.makedirs(CACHE_DIR, exist_ok=True)
-    return os.path.join(CACHE_DIR, f"{code}.json")
+    # 长窗口（如最佳离场时机用 days=2500）与默认窗口分开缓存，避免互相覆盖
+    suffix = "" if days == 120 else f"_d{days}"
+    return os.path.join(CACHE_DIR, f"{code}{suffix}.json")
 
 
-def _load_cache(code: str) -> dict | None:
+def _load_cache(code: str, days: int = 120) -> dict | None:
     try:
-        path = _cache_path(code)
+        path = _cache_path(code, days)
         if os.path.exists(path):
             with open(path) as f:
                 data = json.load(f)
@@ -121,10 +123,10 @@ def _is_trading_session() -> bool:
     return 540 <= t < 930  # 9:00 - 15:30
 
 
-def _save_cache(code: str, data: dict):
+def _save_cache(code: str, data: dict, days: int = 120):
     os.makedirs(CACHE_DIR, exist_ok=True)
     data["date"] = datetime.now().strftime("%Y-%m-%d")
-    with open(_cache_path(code), "w") as f:
+    with open(_cache_path(code, days), "w") as f:
         json.dump(data, f, ensure_ascii=False, indent=2, default=str)
 
 
@@ -321,7 +323,7 @@ def fetch_fund_history(code: str, days: int = 120) -> dict | None:
     - 黄金 → 上海金 Au99.99 现货
     - 未知代码 → 尝试指数接口，失败则用 ETF 接口降级
     """
-    cached = _load_cache(code)
+    cached = _load_cache(code, days)
     if cached:
         return cached
 
@@ -441,5 +443,5 @@ def fetch_fund_history(code: str, days: int = 120) -> dict | None:
     if fund_type == "gold":
         result = _attach_gold_macro(result)
 
-    _save_cache(code, result)
+    _save_cache(code, result, days)
     return result

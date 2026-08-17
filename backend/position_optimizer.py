@@ -147,6 +147,7 @@ def synthesize_position_advice(fund_code: str, return_rate, entry_date, market_c
         "key_reasons": [],
         "add_signal": None,
         "exit_summary": None,
+        "best_exit": None,
         "error": None,
     }
 
@@ -226,4 +227,168 @@ def synthesize_position_advice(fund_code: str, return_rate, entry_date, market_c
         "suggested_action": exit_decision.get("suggested_action"),
     }
 
+    # 6. 最佳离场时机（建仓以来峰值，独立长窗口，失败不拖垮主建议）
+    result["best_exit"] = compute_best_exit(
+        fund_code, entry_date, return_rate, result["latest_nav"],
+    )
+
     return result
+
+
+def compute_best_exit(fund_code: str, entry_date, return_rate, latest_nav=None) -> dict:
+    """
+    建仓以来的「最佳离场时机」：峰值净值 + 峰值日期 + 当前距峰值回撤 + 峰值时收益率（倒推）。
+
+    用长窗口（days=2500，独立缓存）覆盖建仓以来全部历史，避免默认 120 天窗口漏掉久远峰值。
+    """
+    from datetime import datetime
+    from fund_data import fetch_fund_history
+
+    result = {
+        "peak_nav": None,
+        "peak_date": None,
+        "drawdown_from_peak": None,
+        "peak_gain": None,
+        "entry_nav": None,
+        "window_truncated": False,
+        "error": None,
+    }
+
+    if not entry_date:
+        result["error"] = "未填建仓时间"
+        return result
+
+    try:
+        data = fetch_fund_history(fund_code, days=2500)
+    except Exception as e:
+        result["error"] = f"拉取失败: {e}"
+        return result
+
+    if not data:
+        result["error"] = "无法获取基金数据"
+        return result
+
+    closes = data.get("closes", [])
+    dates = data.get("dates", [])
+    if not closes or not dates:
+        result["error"] = "无净值数据"
+        return result
+
+    try:
+        entry_dt = datetime.strptime(entry_date, "%Y-%m-%d")
+    except (ValueError, TypeError):
+        result["error"] = "建仓时间格式错误"
+        return result
+
+    # 建仓是否早于数据窗口起点（诚实标注）
+    try:
+        first_dt = datetime.strptime(dates[0], "%Y-%m-%d")
+        if entry_dt < first_dt:
+            result["window_truncated"] = True
+    except (ValueError, TypeError):
+        pass
+
+    # 找建仓以来峰值 + 日期
+    peak = None
+    peak_date = None
+    for i, d in enumerate(dates):
+        try:
+            dt = datetime.strptime(d, "%Y-%m-%d")
+        except ValueError:
+            continue
+        if dt >= entry_dt and i < len(closes):
+            if peak is None or closes[i] > peak:
+                peak = closes[i]
+                peak_date = d
+
+    if peak is None:
+        result["error"] = "建仓以来无有效净值数据"
+        return result
+
+    result["peak_nav"] = round(peak, 4)
+    result["peak_date"] = peak_date
+
+    latest = latest_nav if latest_nav is not None else (closes[-1] if closes else None)
+    if latest:
+        result["drawdown_from_peak"] = round((latest - peak) / peak * 100, 2)
+
+    # 峰值时收益率：用「当前收益率」倒推建仓净值
+    if return_rate not in (None, "") and latest:
+        try:
+            rr = float(return_rate)
+            entry_nav = latest / (1 + rr / 100.0)
+            result["entry_nav"] = round(entry_nav, 4)
+            result["peak_gain"] = round((peak - entry_nav) / entry_nav * 100, 2)
+        except (ValueError, ZeroDivisionError, TypeError):
+            pass
+
+    return result
+
+
+def compute_add_candidates(held_codes: list[str], market_ctx: dict, limit: int = 5) -> list[dict]:
+    """
+    「加仓其他基金」候选：观澜既有 ETF 推荐宇宙（宽基/成长/价值/红利/债券/黄金/商品），
+    排除当前持仓与现金类（货币/逆回购），按加仓档位 multiplier 降序、网格位置（更便宜）升序取前 N。
+
+    诚实性：市场定投档位「暂停 0.0」时候选 multiplier 会普遍为 0，排序后仍体现「相对最便宜」。
+    """
+    from datetime import datetime, timedelta
+    from quant_strategies import ETF_PICKS
+    from fund_data import fetch_fund_history
+
+    held = {c for c in (held_codes or []) if c}
+
+    seen: set[str] = set()
+    pool: list[dict] = []
+    for category, etfs in ETF_PICKS.items():
+        if category == "cash":  # 货币基金/逆回购非加仓标的
+            continue
+        for e in etfs:
+            code = e.get("code", "")
+            if not code or code == "GC001" or code in held or code in seen:
+                continue
+            seen.add(code)
+            pool.append({"code": code, "name": e.get("name", code)})
+
+    cutoff = datetime.now() - timedelta(days=45)
+
+    def _fresh(fd) -> bool:
+        """数据新鲜度守卫：数据源缺陷（如中证红利 sh000922 只到 2019）不进入候选"""
+        ld = fd.get("latest_nav_date")
+        if not ld:
+            return False
+        try:
+            return datetime.strptime(ld, "%Y-%m-%d") >= cutoff
+        except (ValueError, TypeError):
+            return False
+
+    results: list[dict] = []
+    for p in pool:
+        try:
+            fd = fetch_fund_history(p["code"])
+        except Exception:
+            continue
+        if not fd or not _fresh(fd):
+            continue
+        sig = compute_add_signal(fd, market_ctx)
+        results.append({
+            "fund_code": p["code"],
+            "fund_name": p.get("name") or fd.get("fund_name", p["code"]),
+            "fund_type": fd.get("fund_type", "unknown"),
+            "latest_nav": fd.get("latest_nav"),
+            "latest_nav_date": fd.get("latest_nav_date"),
+            "add_signal": sig,
+        })
+
+    def _sort_key(r):
+        sig = r["add_signal"]
+        mult = sig.get("multiplier")
+        grid = sig.get("grid_position")
+        return (
+            -(mult if mult is not None else 0.0),
+            0.0 if grid is None else 1.0,          # 无网格位置排后
+            grid if grid is not None else 999.0,
+        )
+
+    results.sort(key=_sort_key)
+    return results[:limit]

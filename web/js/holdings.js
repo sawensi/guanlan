@@ -133,7 +133,8 @@ function renderAdvice(data) {
   var resEl = $('holdingsResults');
   resEl.style.display = 'block';
   var html = renderMarketContext(data.market_context || {});
-  (data.holdings || []).forEach(function (h) { html += renderHoldingCard(h); });
+  html += renderSummary(data);
+  html += renderHoldingTable(data.holdings || []);
   if (data.data_note) {
     html += '<div class="holdings-note">ⓘ ' + escHtml(data.data_note) + '</div>';
   }
@@ -214,4 +215,139 @@ function renderHoldingCard(h) {
     errHtml +
     (reasonsHtml ? '<ul class="holdings-reasons">' + reasonsHtml + '</ul>' : '') +
   '</div>';
+}
+
+// ── 汇总建议（顶部） ─────────────────────────────
+
+function renderSummary(data) {
+  var holdings = data.holdings || [];
+  var reduce = holdings.filter(function (h) { return h.action === '减仓' || h.action === '清仓'; });
+  var cands = (data.summary && data.summary.add_candidates) || [];
+
+  var html = '<div class="holdings-summary">' +
+    '<div class="holdings-summary-title">📋 汇总建议</div>';
+
+  // 减仓/清仓当前持仓
+  html += '<div class="holdings-summary-block">' +
+    '<div class="holdings-summary-label">🔻 建议减仓 / 清仓的当前持仓</div>';
+  if (reduce.length === 0) {
+    html += '<div class="holdings-summary-empty">当前无需要减仓或清仓的持仓，全部可继续持有</div>';
+  } else {
+    html += '<div class="holdings-summary-list">';
+    reduce.forEach(function (h) {
+      var a = ACTION_MAP[h.action] || ACTION_MAP['数据不足'];
+      html += '<span class="holdings-summary-item" style="border-color:' + a.color + ';">' +
+        escHtml(h.fund_name || h.fund_code) +
+        ' <span class="badge ' + a.badge + '">' + escHtml(h.action) + '</span>' +
+        (h.action_detail ? '<span class="holdings-summary-reason">' + escHtml(h.action_detail) + '</span>' : '') +
+        '</span>';
+    });
+    html += '</div>';
+  }
+  html += '</div>';
+
+  // 加仓其他基金
+  html += '<div class="holdings-summary-block">' +
+    '<div class="holdings-summary-label">🟢 建议加仓的其他基金（非当前持仓）</div>';
+  if (cands.length === 0) {
+    html += '<div class="holdings-summary-empty">暂无可用候选标的</div>';
+  } else {
+    var allPaused = cands.every(function (c) { return c.add_signal && c.add_signal.tier === '暂停'; });
+    if (allPaused) {
+      html += '<div class="holdings-summary-note">当前大盘估值偏高、定投档位暂停，以下为相对最便宜的候选，待档位回升后再加仓</div>';
+    }
+    html += '<div class="holdings-summary-list">';
+    cands.forEach(function (c) {
+      var sig = c.add_signal || {};
+      var tier = sig.tier || '正常';
+      var color = DCA_TIER_COLOR[tier] || '#2f6fed';
+      var bg = DCA_TIER_BG[tier] || '#e8f1fd';
+      var reason = (sig.reasons && sig.reasons[0]) ? sig.reasons[0] : '';
+      html += '<span class="holdings-summary-item" style="border-color:' + color + ';">' +
+        escHtml(c.fund_name || c.fund_code) +
+        ' <span class="holdings-tier-badge" style="background:' + bg + ';color:' + color + ';">' +
+          escHtml(tier) + (sig.multiplier != null ? ' ' + sig.multiplier + 'x' : '') +
+        '</span>' +
+        (reason ? '<span class="holdings-summary-reason">' + escHtml(reason) + '</span>' : '') +
+        '</span>';
+    });
+    html += '</div>';
+  }
+  html += '</div></div>';
+
+  return html;
+}
+
+// ── 持仓表格 ─────────────────────────────────────
+
+function renderHoldingTable(holdings) {
+  var html = '<div class="holdings-table-wrap"><table class="bt-compare-table">' +
+    '<thead><tr>' +
+    '<th class="bt-cmp-metric">基金</th>' +
+    '<th>净值</th><th>收益率</th><th>持有天数</th>' +
+    '<th>最佳离场时机</th><th>当日建议</th><th>理由</th>' +
+    '</tr></thead><tbody>';
+
+  holdings.forEach(function (h) {
+    var a = ACTION_MAP[h.action] || ACTION_MAP['数据不足'];
+    var typeTag = h.fund_type === 'gold' ? '🥇' : h.fund_type === 'open' ? '📦' : '📊';
+
+    var nav = (h.latest_nav != null && typeof h.latest_nav === 'number') ? h.latest_nav.toFixed(4) : '--';
+    var navDate = h.latest_nav_date ? '<div class="holdings-sub">' + escHtml(h.latest_nav_date) + '</div>' : '';
+
+    var retHtml = '--';
+    if (h.return_rate != null && h.return_rate !== '') {
+      var pnl = parseFloat(h.return_rate);
+      if (!isNaN(pnl)) {
+        retHtml = '<span class="' + (pnl >= 0 ? 'pnl-up' : 'pnl-down') + '">' +
+          (pnl >= 0 ? '+' : '') + pnl.toFixed(2) + '%</span>';
+      }
+    }
+
+    var reasonsHtml = (h.key_reasons || []).map(function (r) { return escHtml(r); }).join('；');
+
+    html += '<tr>' +
+      '<td class="bt-cmp-metric">' +
+        '<div>' + escHtml(h.fund_name || h.fund_code) + ' <span class="holdings-card-type">' + typeTag + '</span></div>' +
+        '<div class="holdings-card-code">' + escHtml(h.fund_code) + '</div>' +
+      '</td>' +
+      '<td>' + nav + navDate + '</td>' +
+      '<td>' + retHtml + '</td>' +
+      '<td>' + (h.days_held != null ? h.days_held + '天' : '--') + '</td>' +
+      '<td>' + renderBestExit(h) + '</td>' +
+      '<td><span class="badge ' + a.badge + '">' + escHtml(h.action) + '</span></td>' +
+      '<td class="holdings-reason-cell">' + (reasonsHtml || '--') + '</td>' +
+      '</tr>';
+  });
+
+  return html + '</tbody></table></div>';
+}
+
+function renderBestExit(h) {
+  var be = h.best_exit || {};
+  if (!be.peak_nav || !be.peak_date) {
+    return '<span class="holdings-sub">--</span>';
+  }
+
+  var dd = be.drawdown_from_peak;
+  var ddHtml = '';
+  if (dd != null) {
+    if (dd < 0) {
+      ddHtml = '<div class="holdings-best-dd">距峰值回撤 <b>' + Math.abs(dd).toFixed(2) + '%</b></div>';
+    } else if (dd === 0) {
+      ddHtml = '<div class="holdings-best-dd">正处峰值</div>';
+    } else {
+      ddHtml = '<div class="holdings-best-dd">较峰值 +' + dd.toFixed(2) + '%</div>';
+    }
+  }
+
+  var gainHtml = be.peak_gain != null
+    ? '<div class="holdings-sub">峰值时收益率≈' + be.peak_gain.toFixed(2) + '%</div>' : '';
+  var truncHtml = be.window_truncated
+    ? '<div class="holdings-sub">峰值取自可用窗口</div>' : '';
+
+  return '<div class="holdings-best-exit">' +
+    '<div class="holdings-sub">' + escHtml(be.peak_date) + ' · ' + be.peak_nav.toFixed(4) + '</div>' +
+    ddHtml + gainHtml + truncHtml +
+    '</div>';
 }

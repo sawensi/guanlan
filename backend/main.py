@@ -697,6 +697,33 @@ async def position_optimization(data: dict = None):
     }
 
 
+# ── 持仓持久化（服务器为准，跨浏览器共享） ──────────────
+
+@app.get("/guanlan/api/holdings")
+async def get_holdings():
+    """读取服务器保存的持仓列表"""
+    data = _load_json("holdings.json", {"holdings": []})
+    return {
+        "holdings": data.get("holdings", []),
+        "saved_at": data.get("saved_at", ""),
+    }
+
+
+@app.post("/guanlan/api/holdings")
+async def save_holdings(data: dict = None):
+    """保存持仓列表（过滤掉空代码行）"""
+    raw = (data or {}).get("holdings") or []
+    clean = [
+        h for h in raw
+        if isinstance(h, dict) and str(h.get("fund_code", "")).strip()
+    ]
+    _save_json("holdings.json", {
+        "holdings": clean,
+        "saved_at": datetime.now().isoformat(),
+    })
+    return {"success": True, "count": len(clean)}
+
+
 # ── 核心 API: 股票排名 ────────────────────────────────
 
 @app.get("/guanlan/api/rankings")

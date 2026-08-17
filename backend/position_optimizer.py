@@ -53,10 +53,21 @@ def compute_add_signal(fund_data: dict, market_ctx: dict) -> dict:
     - 动量：近 1 月跌 >5% 加码、涨 >10% 减码（对应 _signal_dca 逻辑）
     - 均线：多头/金叉上浮、空头/死叉下调
     """
+    # 估值口径分流：QDII/黄金/债券不受国内沪深300 PE 分位约束，按自身技术面定档（基准中性 1.0）
+    fund_type = fund_data.get("fund_type", "")
+    NON_DOMESTIC_TYPES = {"qdii", "gold", "bond"}
+    TYPE_LABEL = {"qdii": "QDII", "gold": "黄金", "bond": "债券"}
+    valuation_applies = fund_type not in NON_DOMESTIC_TYPES
+
     dca = market_ctx.get("dca_consensus") or {}
-    base_mult = dca.get("multiplier")
-    if base_mult is None:
+    if valuation_applies:
+        base_mult = dca.get("multiplier")
+        if base_mult is None:
+            base_mult = 1.0
+        base_note = ""
+    else:
         base_mult = 1.0
+        base_note = f"{TYPE_LABEL.get(fund_type, fund_type)} 资产不受国内估值分位约束，按自身技术面定档"
 
     latest_nav = fund_data.get("latest_nav")
     grid_high = fund_data.get("grid_high")
@@ -122,6 +133,8 @@ def compute_add_signal(fund_data: dict, market_ctx: dict) -> dict:
         "momentum_1m": momentum_1m,
         "ma_status": ma_status,
         "reasons": reasons,
+        "valuation_applied": valuation_applies,
+        "base_note": base_note,
     }
 
 

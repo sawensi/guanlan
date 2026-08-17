@@ -5,8 +5,9 @@
  */
 
 var HOLDINGS_KEY = 'guanlan.holdings';
+var _saveTimer = null;
 
-// ── 本地持久化 ─────────────────────────────────
+// ── 持久化（服务器为准 + localStorage 兜底） ─────
 
 function readHoldings() {
   try {
@@ -20,19 +21,35 @@ function readHoldings() {
 }
 
 function saveHoldings() {
+  var h = collectHoldings();
   try {
-    localStorage.setItem(HOLDINGS_KEY, JSON.stringify(collectHoldings()));
+    localStorage.setItem(HOLDINGS_KEY, JSON.stringify(h));
   } catch (e) { /* 隐私模式等场景忽略 */ }
+  // 防抖同步到服务器（跨浏览器共享）
+  if (_saveTimer) clearTimeout(_saveTimer);
+  _saveTimer = setTimeout(function () {
+    post('/holdings', { holdings: h });
+  }, 500);
 }
 
 // ── 编辑器 ─────────────────────────────────────
 
-function loadHoldings() {
+async function loadHoldings() {
   APP.holdings = true;
   var rowsEl = $('holdingsRows');
   if (!rowsEl) return;
   rowsEl.innerHTML = '';
-  var saved = readHoldings();
+
+  // 服务器为准；失败/为空则回退 localStorage（离线或老用户不丢数据）
+  var saved = [];
+  var server = await get('/holdings');
+  if (server && server.holdings && server.holdings.length > 0) {
+    saved = server.holdings;
+    try { localStorage.setItem(HOLDINGS_KEY, JSON.stringify(saved)); } catch (e) {}
+  } else {
+    saved = readHoldings();
+  }
+
   if (saved.length === 0) {
     addHoldingRow();
   } else {
@@ -263,11 +280,13 @@ function renderSummary(data) {
       var color = DCA_TIER_COLOR[tier] || '#2f6fed';
       var bg = DCA_TIER_BG[tier] || '#e8f1fd';
       var reason = (sig.reasons && sig.reasons[0]) ? sig.reasons[0] : '';
+      var nonDomestic = (sig.valuation_applied === false) ? '<span class="holdings-nondomestic">非A股口径</span>' : '';
       html += '<span class="holdings-summary-item" style="border-color:' + color + ';">' +
         escHtml(c.fund_name || c.fund_code) +
         ' <span class="holdings-tier-badge" style="background:' + bg + ';color:' + color + ';">' +
           escHtml(tier) + (sig.multiplier != null ? ' ' + sig.multiplier + 'x' : '') +
         '</span>' +
+        nonDomestic +
         (reason ? '<span class="holdings-summary-reason">' + escHtml(reason) + '</span>' : '') +
         '</span>';
     });
@@ -304,8 +323,6 @@ function renderHoldingTable(holdings) {
       }
     }
 
-    var reasonsHtml = (h.key_reasons || []).map(function (r) { return escHtml(r); }).join('；');
-
     html += '<tr>' +
       '<td class="bt-cmp-metric">' +
         '<div>' + escHtml(h.fund_name || h.fund_code) + ' <span class="holdings-card-type">' + typeTag + '</span></div>' +
@@ -316,7 +333,7 @@ function renderHoldingTable(holdings) {
       '<td>' + (h.days_held != null ? h.days_held + '天' : '--') + '</td>' +
       '<td>' + renderBestExit(h) + '</td>' +
       '<td><span class="badge ' + a.badge + '">' + escHtml(h.action) + '</span></td>' +
-      '<td class="holdings-reason-cell">' + (reasonsHtml || '--') + '</td>' +
+      '<td class="holdings-reason-cell">' + renderReasons(h) + '</td>' +
       '</tr>';
   });
 
@@ -350,4 +367,19 @@ function renderBestExit(h) {
     '<div class="holdings-sub">' + escHtml(be.peak_date) + ' · ' + be.peak_nav.toFixed(4) + '</div>' +
     ddHtml + gainHtml + truncHtml +
     '</div>';
+}
+
+// 理由按策略逐条分行，开头【策略名】加粗
+function renderReasons(h) {
+  var lines = (h.key_reasons || []).map(function (r) {
+    var s = escHtml(r).replace(/^(【[^】]+】)/, '<b>$1</b>');
+    return '<div class="holdings-reason-line">' + s + '</div>';
+  });
+
+  // 非 A股口径的资产（QDII/黄金/债券）补一行口径说明
+  if (h.add_signal && h.add_signal.valuation_applied === false && h.add_signal.base_note) {
+    lines.push('<div class="holdings-reason-line holdings-reason-note">' + escHtml(h.add_signal.base_note) + '</div>');
+  }
+
+  return lines.length ? lines.join('') : '--';
 }

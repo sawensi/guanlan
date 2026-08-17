@@ -1925,4 +1925,11 @@ body {
 .holdings-sub { font-size: .72rem; color: var(--text-3); white-space: nowrap; }
 .holdings-best-exit { text-align: left; }
 .holdings-best-dd { font-size: .78rem; color: var(--red, #d94444); font-weight: 600; white-space: nowrap; }
-.holdings-reason-cell { text-align: left !important; font-size: .74rem; color: #555; white-space: normal; min-width: 200px; }
+.holdings-reason-cell { text-align: left !important; font-size: .74rem; color: #555; white-space: normal; min-width: 160px; }
+.holdings-reason-line { margin: 2px 0; line-height: 1.45; }
+.holdings-reason-line b { color: var(--text-1, #1a202c); font-weight: 600; }
+.holdings-reason-note { color: var(--text-3); font-size: .7rem; }
+.holdings-nondomestic {
+  font-size: .66rem; color: var(--blue, #3b7fd4); background: #e8eff8;
+  border-radius: 5px; padding: 1px 5px; white-space: nowrap;
+}
